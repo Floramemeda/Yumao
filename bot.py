@@ -10,16 +10,25 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# 小游戏扩展
+EXTENSIONS = [
+    'minigames.drinking_contest',
+]
+
+
+@bot.event
+async def setup_hook():
+    for ext in EXTENSIONS:
+        await bot.load_extension(ext)
+    synced = await bot.tree.sync()
+    print(f'已同步 {len(synced)} 个 Slash Command')
+
 
 @bot.event
 async def on_ready():
     print(f'登录成功: {bot.user.name}')
-    print(f'控制频道: {config.CONTROL_CHANNEL_IDS}')
-    print('控制频道与搜索频道映射:')
-    for control_id, search_ids in config.CONTROL_TO_SEARCH_MAP.items():
-        print(f'  {control_id} -> {search_ids}')
-
-
+    print(f'找人服务器: {config.PERSONA_GUILD_ID}')
+    print(f'人设子区: {config.PERSONA_THREAD_IDS}')
 
     # 发送上线通知
     await responses.send_online_notice(bot)
@@ -27,23 +36,17 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    # 忽略自己和私信
+    if message.author == bot.user or message.guild is None:
         return
 
     # 处理中文对话频道消息（不要求提及机器人）
-    if message.channel.category_id == responses.CHAT_CATEGORY_ID:
-        await responses.handle_category_chat(bot, message)
+    if await responses.handle_category_chat(bot, message):
+        return
 
-    # 处理 /location 命令
-    if message.content.startswith('/location'):
-        await responses.handle_location_command(bot, message)
-
-    # 处理控制频道的提及
-    if bot.user.mentioned_in(message) and message.channel.id in config.CONTROL_CHANNEL_IDS:
-        await responses.handle_control_mention(bot, message)
-    # 处理非控制频道的提及
-    elif bot.user.mentioned_in(message):
-        await responses.handle_non_control_mention(bot, message)
+    # 处理人设服务器中的 @玉猫（不用 mentioned_in，它会把 @everyone 也算进去）
+    if message.guild.id == config.PERSONA_GUILD_ID and bot.user in message.mentions:
+        await responses.handle_mention(bot, message)
 
     await bot.process_commands(message)
 

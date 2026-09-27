@@ -1,0 +1,25 @@
+{
+  "min_players": 2,
+  "round_timeout_seconds": 60,
+  "initial_drunkenness": 0,
+  "max_drunkenness": 100,
+
+  "drink": {
+    "alcohol_probability": 0.9,
+    "alcohol_increase": [5, 15],
+    "food_probability": 0.1,
+    "food_decrease": 5
+  },
+
+  "pretend": {
+    "success_probability": 0.4,
+    "failure_drink_count": 3
+  },
+
+  "allowed_channel_ids": [
+    1545694742841397309,
+    1544878105594830888
+  ],
+
+  "state_file": "data/drinking_contest_state.json"
+}
