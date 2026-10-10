@@ -264,9 +264,38 @@ class DrinkingService:
         game.round_deadline = now + timedelta(seconds=self.cfg["round_timeout_seconds"])
         game.pending_result = None
         self.save()
-        await self._edit_panel(game)
+        await self._repost_panel(game)
         if game.game_id in self.games:
             self._schedule_timeout(game)
+
+    async def _repost_panel(self, game: DrinkingGame) -> None:
+        """每轮开始时把面板重新发到频道底部，并删除旧面板。
+
+        先发新面板并落盘新 message_id，再删旧面板；旧 id 提前从 by_message 移除，
+        这样删除旧面板触发的 on_raw_message_delete 不会误取消游戏。
+        """
+        channel = self._channel(game)
+        if channel is None:
+            return
+        old_id = game.message_id
+        try:
+            message = await channel.send(embed=renderer.panel_embed(game), view=views.round_view(game),
+                                         allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException as e:
+            log.warning("千杯不醉：重发面板失败，改为原地更新: %s", e)
+            await self._edit_panel(game)
+            return
+
+        self.by_message.pop(old_id, None)
+        game.message_id = message.id
+        self.by_message[message.id] = game.game_id
+        self.save()
+        try:
+            await channel.get_partial_message(old_id).delete()
+        except discord.NotFound:
+            pass
+        except discord.HTTPException as e:
+            log.warning("千杯不醉：删除旧面板失败: %s", e)
 
     async def handle_action(self, interaction: discord.Interaction, game_id: str,
                             round_number: int, action: Action) -> None:
