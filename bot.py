@@ -14,6 +14,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 EXTENSIONS = [
     'minigames.drinking_contest',
     'minigames.potato_heist',
+    'minigames.pet_spark',
 ]
 
 

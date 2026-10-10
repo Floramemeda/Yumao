@@ -1,0 +1,26 @@
+{
+  "default_timezone": "Asia/Shanghai",
+
+  "guilds": {
+    "1541312608114581576": {
+      "timezone": "Asia/Shanghai",
+      "reminder_enabled": true,
+      "reminder_channel_id": 1544878105594830888
+    }
+  },
+
+  "reminder_time": "22:00",
+  "reminder_mentions_per_message": 15,
+  "reminder_record_keep_days": 7,
+
+  "levels": [
+    {"level": 1, "name": "初识", "emoji": "🌱", "threshold": 1, "description": "第一次摸到玉猫"},
+    {"level": 2, "name": "微光", "emoji": "🕯️", "threshold": 2, "description": "玉猫记住了你的手"},
+    {"level": 3, "name": "暖焰", "emoji": "🔥", "threshold": 7, "description": "玉猫会主动蹭你了"},
+    {"level": 4, "name": "炽焰", "emoji": "❤️‍🔥", "threshold": 14, "description": "玉猫的专属两脚兽"},
+    {"level": 5, "name": "长明", "emoji": "🏮", "threshold": 30, "description": "玉猫心里的一盏灯"},
+    {"level": 6, "name": "不灭", "emoji": "🌟", "threshold": 100, "description": "千年万年，本喵都记得你"}
+  ],
+
+  "state_file": "data/pet_spark_state.json"
+}
