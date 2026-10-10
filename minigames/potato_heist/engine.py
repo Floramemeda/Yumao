@@ -139,10 +139,12 @@ def resolve_round(game: HeistGame, max_rounds: int) -> dict:
         p.captured, p.captured_round = True, r
         captures.append({"user_id": p.user_id, "how": how, "node": p.position})
 
-    # 3. 公共区域同位置抓捕（只看结算后的位置，不判路径交叉）
-    for m in game.alive_mice():
-        if m.position == cat.position:
-            capture(m, "public")
+    # 3. 公共区域抓捕：仅当警长本轮上楼/下楼巡逻时触发（查房时不在公共区抓人）
+    #    只看结算后的位置，不判路径交叉
+    if parse(sealed[cat.user_id])[0] in ("up", "down"):
+        for m in game.alive_mice():
+            if m.position == cat.position:
+                capture(m, "public")
 
     # 4. 搜查：按鼠行动后的最终位置抓捕，并设置两轮冷却（搜空同样生效）
     search_info = None

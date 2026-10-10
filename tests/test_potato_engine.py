@@ -148,6 +148,65 @@ class CaptureTests(unittest.TestCase):
         self.assertIsNone(r["potato_event"])
 
 
+class PublicCaptureRuleTests(unittest.TestCase):
+    """公共区抓捕只在警长上/下楼时触发；查房时只抓被查房间内的鼠。"""
+
+    CASES = [
+        # (说明, 猫位置, 猫行动, 鼠起点, 鼠行动(None=超时原地不动), 预期被捕)
+        ("查幔雪阁，鼠 幔雪阁→走廊", CORRIDOR, search("manxue"), "manxue", move(CORRIDOR), False),
+        ("查幔雪阁，鼠 走廊→幔雪阁", CORRIDOR, search("manxue"), CORRIDOR, move("manxue"), True),
+        ("查幔雪阁，鼠留在幔雪阁", CORRIDOR, search("manxue"), "manxue", WAIT, True),
+        ("查幔雪阁，鼠留在走廊", CORRIDOR, search("manxue"), CORRIDOR, None, False),
+        ("查后厨，鼠 后厨→大堂", HALL, search(KITCHEN), KITCHEN, move(HALL), False),
+        ("查后厨，鼠 大堂→后厨", HALL, search(KITCHEN), HALL, move(KITCHEN), True),
+        ("上楼，鼠最终在走廊", HALL, UP, "zhenfeng", move(CORRIDOR), True),
+        ("下楼，鼠最终在大堂", CORRIDOR, DOWN, KITCHEN, move(HALL), True),
+        ("上楼，鼠最终在雅间", HALL, UP, CORRIDOR, move("gehua"), False),
+        ("下楼，鼠最终在后厨", CORRIDOR, DOWN, HALL, move(KITCHEN), False),
+    ]
+
+    def test_cases(self):
+        for desc, cat_pos, cat_act, mouse_pos, mouse_act, expected in self.CASES:
+            with self.subTest(desc):
+                # 加一只安全的鼠，避免全员被捕直接结束影响判定
+                g = make_game(cat_pos=cat_pos, mice={2: mouse_pos, 9: "lianyue"}, secret="zhenfeng")
+                engine.submit_action(g, CAT, cat_act)
+                if mouse_act is not None:
+                    engine.submit_action(g, 2, mouse_act)
+                r = engine.resolve_round(g, MAX)
+                self.assertEqual(g.players[2].captured, expected)
+                self.assertFalse(g.players[9].captured)
+                self.assertEqual([c["user_id"] for c in r["captures"]], [2] if expected else [])
+
+    def test_search_with_multiple_mice(self):
+        g = make_game(cat_pos=CORRIDOR, mice={2: "manxue", 3: CORRIDOR, 4: "gehua", 5: CORRIDOR})
+        act(g, p1=search("manxue"), p2=move(CORRIDOR), p3=move("manxue"), p4=WAIT)  # 5 超时留在走廊
+        r = engine.resolve_round(g, MAX)
+        self.assertEqual([c["user_id"] for c in r["captures"]], [3])
+        self.assertEqual(r["captures"][0]["how"], "search")
+        self.assertEqual(r["search"]["captured"], [3])
+        self.assertIsNone(r["winner"])
+        self.assertEqual(g.search_next_available_round["manxue"], 4)  # 冷却不变
+        self.assertEqual(engine.public_view(g)["captured_ids"], [3])
+
+    def test_patrol_catches_all_mice_in_area_and_ends_game(self):
+        g = make_game(cat_pos=HALL, mice={2: "zhenfeng", 3: "gehua"})
+        act(g, p1=UP, p2=move(CORRIDOR), p3=move(CORRIDOR))
+        r = engine.resolve_round(g, MAX)
+        self.assertEqual([(c["user_id"], c["how"]) for c in r["captures"]], [(2, "public"), (3, "public")])
+        self.assertEqual((r["winner"], r["win_reason"]), ("cat", engine.CAT_WIN_ALL_CAPTURED))
+        self.assertIn("在二楼走廊逮住了", json.dumps(renderer.round_embed(r).to_dict(), ensure_ascii=False))
+
+    def test_carrier_dodging_search_keeps_potato(self):
+        g = make_game(cat_pos=HALL, mice={2: KITCHEN, 3: "gehua"})
+        g.potato_carrier_id = 2
+        act(g, p1=search(KITCHEN), p2=move(HALL), p3=WAIT)
+        r = engine.resolve_round(g, MAX)
+        self.assertFalse(g.players[2].captured)
+        self.assertEqual((g.potato_carrier_id, g.escaped_kitchen_at_round), (2, 1))
+        self.assertIsNone(r["potato_event"])
+
+
 class PotatoTests(unittest.TestCase):
     def test_win_timeline(self):
         g = make_game(cat_pos=CORRIDOR, mice={2: KITCHEN, 3: "zhenfeng"})
