@@ -15,6 +15,11 @@ def channel_allowed(channel, allowed_ids) -> bool:
     return channel.id in allowed_ids or getattr(channel, "parent_id", None) in allowed_ids
 
 
+def thread_under(channel, parent_ids) -> bool:
+    """只允许指定频道下的子区（频道本身不行）。"""
+    return getattr(channel, "parent_id", None) in parent_ids
+
+
 def write_json_atomic(path: Path, data) -> None:
     """先写临时文件再替换，避免写到一半崩溃留下损坏的存档。"""
     path.parent.mkdir(parents=True, exist_ok=True)

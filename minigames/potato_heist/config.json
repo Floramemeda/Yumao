@@ -6,9 +6,8 @@
   "all_submitted_grace_seconds": 0,
   "lobby_timeout_seconds": 1800,
 
-  "allowed_channel_ids": [
-    1545694742841397309,
-    1544878105594830888
+  "allowed_thread_parent_ids": [
+    1545695056231665744
   ],
 
   "state_file": "data/potato_heist_state.json"

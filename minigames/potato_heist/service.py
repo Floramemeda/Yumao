@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import discord
 
-from ..common import PROJECT_ROOT, channel_allowed, write_json_atomic
+from ..common import PROJECT_ROOT, thread_under, write_json_atomic
 from . import engine, renderer, views
 from .models import TERMINAL, HeistGame, Player, Status, describe
 
@@ -31,7 +31,7 @@ MSG_NO_CANCEL = "只有主持人或管理员可以取消游戏"
 MSG_NOT_STARTED = "游戏还没开始"
 MSG_STALE_ROUND = "本轮已经结束，已为你刷新到当前回合。"
 MSG_CHANNEL_BUSY = "本频道已经有一局偷薯饼在进行了。"
-MSG_CHANNEL_NOT_ALLOWED = "这里不能开偷薯饼哦，请到 {channels} 或其子区里开"
+MSG_CHANNEL_NOT_ALLOWED = "这里不能开偷薯饼哦，请到 {channels} 下的子区里开"
 
 
 def _now() -> datetime:
@@ -176,8 +176,8 @@ class HeistService:
     # ------------------------------------------------------------------ 报名
 
     async def create_game(self, interaction: discord.Interaction) -> None:
-        allowed = self.cfg["allowed_channel_ids"]
-        if not channel_allowed(interaction.channel, allowed):
+        allowed = self.cfg["allowed_thread_parent_ids"]
+        if not thread_under(interaction.channel, allowed):
             channels = "、".join(f"<#{cid}>" for cid in allowed)
             await interaction.response.send_message(MSG_CHANNEL_NOT_ALLOWED.format(channels=channels), ephemeral=True)
             return

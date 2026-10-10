@@ -11,7 +11,8 @@ from minigames.potato_heist import engine
 from minigames.potato_heist.models import KITCHEN, STEAL, Role, Status
 from minigames.potato_heist.service import HeistService
 
-CHANNEL_ID = engine.load_config()["allowed_channel_ids"][0]
+PARENT_ID = engine.load_config()["allowed_thread_parent_ids"][0]
+CHANNEL_ID = 777  # 子区 id
 
 
 class FakeMessage:
@@ -29,6 +30,7 @@ class FakeMessage:
 class FakeChannel:
     def __init__(self):
         self.id = CHANNEL_ID
+        self.parent_id = PARENT_ID
         self.sent = []
         self.deleted = set()   # fetch 时视为已不存在的消息
         self.removed = []      # bot 主动删除的消息
@@ -134,6 +136,18 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         return it.edits[-1]
 
     # ---- 报名
+
+    async def test_only_threads_under_allowed_channel(self):
+        for desc, ch in (("频道本身", NS(id=PARENT_ID)),
+                         ("其他频道的子区", NS(id=888, parent_id=12345))):
+            with self.subTest(desc):
+                it = self.it(1)
+                it.channel, it.channel_id = ch, ch.id
+                await self.svc.create_game(it)
+                self.assertIn("下的子区里开", it.replies[0])
+                self.assertEqual(self.svc.games, {})
+        await self.svc.create_game(self.it(1))  # 允许的子区
+        self.assertEqual(len(self.svc.games), 1)
 
     async def test_player_count_bounds(self):
         game = await self.create(players=2)
