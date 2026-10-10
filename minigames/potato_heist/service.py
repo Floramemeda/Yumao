@@ -351,9 +351,28 @@ class HeistService:
                 await update(embed=embed, view=view)
                 return
             self.save()
-            embed, view = self._private_panel(game, uid, f"✅ 已选择：{describe(value)}")
+            everyone = game.submitted_count() == len(game.actors())
+            notice = f"✅ 已选择：{describe(value)}" + ("\n所有人都选好了，马上结算！" if everyone else "")
+            embed, view = self._private_panel(game, uid, notice)
             await update(embed=embed, view=view)
-            await self._edit_panel(game)
+            if everyone:
+                await self._all_submitted_locked(game)
+            else:
+                await self._edit_panel(game)
+
+    async def _all_submitted_locked(self, game: HeistGame) -> None:
+        """全员选好：立即结算；配置了缓冲时间则把截止时间提前到缓冲结束（期间仍可改选）。"""
+        grace = self.cfg.get("all_submitted_grace_seconds", 0)
+        if grace <= 0:
+            self._cancel_timer(game.session_id)
+            await self._resolve_locked(game, game.round_no)
+            return
+        new_deadline = _now() + timedelta(seconds=grace)
+        if new_deadline < game.deadline:
+            game.deadline = new_deadline
+            self.save()
+            self._schedule(game)
+        await self._edit_panel(game)
 
     # ------------------------------------------------------------------ 回合
 
@@ -363,9 +382,39 @@ class HeistService:
         game.deadline = _now() + timedelta(seconds=self.cfg["round_timeout_seconds"])
         game.pending_result = None
         self.save()
-        await self._edit_panel(game)
+        await self._repost_panel(game)
         if game.session_id in self.games:
             self._schedule(game)
+
+    async def _repost_panel(self, game: HeistGame) -> None:
+        """每轮开始时把面板重新发到频道底部，并删除旧面板。
+
+        先发新面板并落盘新 message_id，再删旧面板；旧 id 提前从 by_message 移除，
+        这样删除旧面板触发的 on_raw_message_delete 不会误取消游戏。
+        """
+        channel = self.bot.get_channel(game.channel_id)
+        if channel is None:
+            return
+        old_id = game.message_id
+        try:
+            message = await channel.send(embed=renderer.panel_embed(engine.public_view(game), self.cfg),
+                                         view=views.game_view(game),
+                                         allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException as e:
+            log.warning("偷薯饼：重发面板失败，改为原地更新: %s", e)
+            await self._edit_panel(game)
+            return
+
+        self.by_message.pop(old_id, None)
+        game.message_id = message.id
+        self.by_message[message.id] = game.session_id
+        self.save()
+        try:
+            await channel.get_partial_message(old_id).delete()
+        except discord.NotFound:
+            pass
+        except discord.HTTPException as e:
+            log.warning("偷薯饼：删除旧面板失败: %s", e)
 
     def _schedule(self, game: HeistGame) -> None:
         self._cancel_timer(game.session_id)

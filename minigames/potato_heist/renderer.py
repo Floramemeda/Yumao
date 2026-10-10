@@ -20,7 +20,7 @@ COLOR_MICE = discord.Color.green()
 RULES = (
     "**角色**：1 名猫猫警长，其余都是鼠鼠。\n"
     "**地图**：一楼「大堂」「后厨」；二楼「二楼走廊」和四个雅间「枕风阁 / 隔花阁 / 幔雪阁 / 帘月阁」。\n"
-    "**每轮**：所有人在截止前通过「我的行动」秘密选择，可反复修改，截止时以最后一次为准，然后同时结算。\n\n"
+    "**每轮**：所有人在截止前通过「我的行动」秘密选择，可反复修改；截止或所有人都选好时，以最后一次选择为准同时结算。\n\n"
     "🐱 **警长**（从大堂出发，只站在大堂或二楼走廊）\n"
     "· 每轮必须：上楼 / 下楼 / 搜查本楼层一个房间（一楼查后厨，二楼查雅间）\n"
     "· 房间被查后，接下来两轮不能再查（搜空也算）\n"
@@ -99,7 +99,7 @@ def panel_embed(pub: dict, cfg: dict) -> discord.Embed:
     embed.add_field(name="查房记录", value="\n".join(_search_lines(pub)) or "暂无", inline=False)
     embed.add_field(name="已被捕", value="、".join(_m(u) for u in pub["captured_ids"]) or "暂无", inline=False)
     if status == Status.ROUND_INPUT:
-        embed.set_footer(text="点「我的行动」查看身份、位置并秘密选择行动 · 截止前可修改")
+        embed.set_footer(text="点「我的行动」查看身份、位置并秘密选择行动 · 所有人选好后立即结算")
     return embed
 
 
@@ -174,7 +174,7 @@ def private_embed(view: dict, round_no: int, max_rounds: int, notice: str | None
     else:
         chosen = view["current_action"]
         embed.description = (f"第 {round_no} / {max_rounds} 轮 · 本轮选择："
-                             f"**{describe(chosen) if chosen else '尚未选择'}**\n截止前可以改选。")
+                             f"**{describe(chosen) if chosen else '尚未选择'}**\n可以改选；所有人都选好后会立即结算。")
     if view["note"]:
         embed.add_field(name="提示", value=view["note"], inline=False)
     if notice:

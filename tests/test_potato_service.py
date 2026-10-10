@@ -15,30 +15,38 @@ CHANNEL_ID = engine.load_config()["allowed_channel_ids"][0]
 
 
 class FakeMessage:
-    def __init__(self, mid):
+    def __init__(self, mid, channel=None):
         self.id = mid
+        self.channel = channel
 
     async def edit(self, **kwargs):
         pass
+
+    async def delete(self):
+        self.channel.removed.append(self.id)
 
 
 class FakeChannel:
     def __init__(self):
         self.id = CHANNEL_ID
         self.sent = []
-        self.deleted = set()
+        self.deleted = set()   # fetch 时视为已不存在的消息
+        self.removed = []      # bot 主动删除的消息
+        self._next_id = 5000
 
     def get_partial_message(self, mid):
-        return FakeMessage(mid)
+        return FakeMessage(mid, self)
 
     async def fetch_message(self, mid):
         if mid in self.deleted:
             import discord
             raise discord.NotFound(NS(status=404, reason="gone"), "gone")
-        return FakeMessage(mid)
+        return FakeMessage(mid, self)
 
     async def send(self, content=None, embed=None, **kwargs):
         self.sent.append((content, embed.to_dict() if embed else None))
+        self._next_id += 1
+        return FakeMessage(self._next_id, self)
 
 
 class FakeBot:
@@ -217,15 +225,65 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         for m in game.mice():
             m.position = KITCHEN
             await self.select(m.user_id, STEAL)
-        await self.select(game.cat.user_id, "up")
         self.channel.sent.clear()  # 开局消息会 @ 所有人，只检查之后的播报
-        async with self.svc._lock(self.sid):
-            await self.svc._resolve_locked(game, 1)
+        await self.select(game.cat.user_id, "up")  # 最后一人选好 → 立即结算
+        self.assertEqual(game.round_no, 2)
         blob = json.dumps(self.channel.sent, ensure_ascii=False)
         self.assertIn("薯饼失窃", blob)
         self.assertNotIn(NODE_NAMES[game.secret_room], blob)
         for m in game.mice():
             self.assertNotIn(f"<@{m.user_id}>", blob)
+
+    async def test_panel_reposted_each_round(self):
+        game = await self.create()
+        lobby_id = game.message_id
+        await self.lobby(1, "start")
+        self.assertIn(lobby_id, self.channel.removed)        # 开局后招募面板被换到底部
+        round1_id = game.message_id
+        self.assertNotEqual(round1_id, lobby_id)
+        async with self.svc._lock(self.sid):
+            await self.svc._resolve_locked(game, 1)
+        self.assertEqual(game.round_no, 2)
+        self.assertNotEqual(game.message_id, round1_id)
+        self.assertIn(round1_id, self.channel.removed)
+        # 新面板在本轮结算播报之后
+        self.assertTrue(self.channel.sent[-2][1]["title"].startswith("第 1 轮"))
+        self.assertTrue(self.channel.sent[-1][1]["title"].endswith("第 2 / 10 轮"))
+        # 删除旧面板触发的事件不会取消游戏；删除当前面板仍会取消
+        await self.svc.on_message_deleted(round1_id)
+        self.assertEqual(game.status, Status.ROUND_INPUT)
+        self.assertEqual(self.svc.by_message, {game.message_id: self.sid})
+        saved = json.loads(Path(self.cfg["state_file"]).read_text(encoding="utf-8"))
+        self.assertEqual(saved["games"][0]["message_id"], game.message_id)
+        await self.svc.on_message_deleted(game.message_id)
+        self.assertEqual(game.status, Status.CANCELLED)
+
+    async def test_resolves_as_soon_as_everyone_chose(self):
+        game = await self.started(players=4)
+        mice = game.mice()
+        mice[0].captured = True  # 被捕的鼠不需要行动
+        await self.select(mice[1].user_id, "wait")
+        await self.select(game.cat.user_id, engine.legal_actions(game, game.cat.user_id)[0])
+        self.assertEqual(game.round_no, 1)  # 还有人没选
+        await self.select(mice[2].user_id, "move:corridor")
+        await self.select(mice[2].user_id, "wait")  # 未全员前仍可改选
+        self.assertEqual(game.round_no, 2)
+        self.assertEqual(game.resolved_round, 1)
+        self.assertEqual(game.status, Status.ROUND_INPUT)
+        self.assertIn("第 1 轮", json.dumps(self.channel.sent, ensure_ascii=False))
+        # 计时器已被替换为第 2 轮的；第 1 轮不会被再次结算
+        await asyncio.sleep(0)
+        self.assertEqual(sum("第 1 轮 · 结算" in json.dumps(e, ensure_ascii=False)
+                             for _, e in self.channel.sent if e), 1)
+
+    async def test_grace_period_shortens_deadline(self):
+        self.cfg["all_submitted_grace_seconds"] = 0.05
+        game = await self.started()
+        for p in game.players.values():  # 猫查后厨、鼠在雅间等待：本轮无人被捕
+            await self.select(p.user_id, "search:kitchen" if p.role == Role.CAT else "wait")
+        self.assertEqual(game.round_no, 1)  # 缓冲期内仍可改选
+        await asyncio.sleep(0.15)
+        self.assertEqual(game.round_no, 2)
 
     # ---- 重启恢复
 
