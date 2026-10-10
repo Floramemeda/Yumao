@@ -50,6 +50,19 @@ def pick(lines: dict, group: str, level: int, rng: random.Random) -> str:
     return rng.choice(pool["entries"])
 
 
+def milestone_days(lines: dict) -> set[int]:
+    """里程碑天数 = milestone 组下的池名（如 "7"、"30"）。"""
+    return {int(name) for name in lines.get("groups", {}).get("milestone", {}) if name.isdigit()}
+
+
+def milestone_line(lines: dict, streak: int, rng: random.Random) -> str | None:
+    """连续天数恰好是里程碑时，必定从对应池里取一条；否则返回 None。不参与普通随机抽取。"""
+    pool = lines.get("groups", {}).get("milestone", {}).get(str(streak))
+    if not pool or not pool.get("enabled", True) or not pool.get("entries"):
+        return None
+    return rng.choice(pool["entries"])
+
+
 def render(text: str, *, mention: str = "", streak: int = 0, level_name: str = "") -> str:
     """只替换白名单占位符；其余花括号原样保留。"""
     return (text.replace("{mention}", mention)

@@ -119,6 +119,92 @@ class LinesTests(unittest.TestCase):
         self.assertEqual(msg.count("<@"), 1)
 
 
+class MilestoneTests(unittest.TestCase):
+    MILESTONES = (7, 14, 30, 100, 365)
+
+    def setUp(self):
+        self.lines = lines_mod.load_lines()
+        self.rng = random.Random(3)
+
+    def msg(self, p, r, today):
+        return renderer.checkin_message(1, p, r, today, LEVELS, self.lines, self.rng)
+
+    def test_configured_days(self):
+        self.assertEqual(lines_mod.milestone_days(self.lines), set(self.MILESTONES))
+
+    def test_fires_exactly_on_milestone_days(self):
+        p = Progress(1, 1)
+        fired = []
+        for i in range(400):
+            r = checkin(p, day(i), LEVELS)
+            text = self.msg(p, r, day(i))
+            if "🏆" in text:
+                fired.append(p.streak_count)
+                entries = self.lines["groups"]["milestone"][str(p.streak_count)]["entries"]
+                self.assertTrue(any(e in text for e in entries))
+                self.assertIn("今日撸猫成功", text)  # 正常回应仍保留
+        self.assertEqual(fired, list(self.MILESTONES))
+
+    def test_repeat_same_day_no_milestone(self):
+        p = Progress(1, 1)
+        for i in range(7):
+            r = checkin(p, day(i), LEVELS)
+        self.assertIn("🏆", self.msg(p, r, day(6)))
+        for _ in range(5):
+            r = checkin(p, day(6), LEVELS)
+            self.assertNotIn("🏆", self.msg(p, r, day(6)))
+
+    def test_retriggers_after_break(self):
+        p = Progress(1, 1)
+        fired = []
+        for i in list(range(7)) + list(range(10, 17)):  # 第 7 天达成后断签，再连续 7 天
+            r = checkin(p, day(i), LEVELS)
+            if "🏆" in self.msg(p, r, day(i)):
+                fired.append(i)
+        self.assertEqual(fired, [6, 16])
+
+
+class MemeDistributionTests(unittest.TestCase):
+    def setUp(self):
+        self.lines = lines_mod.load_lines()
+        self.index = {e: k for k, v in self.lines["groups"]["meme"].items() for e in v["entries"]}
+
+    def share(self, level, n=200000):
+        rng = random.Random(11)
+        counts = {}
+        for _ in range(n):
+            k = self.index[lines_mod.pick(self.lines, "meme", level, rng)]
+            counts[k] = counts.get(k, 0) + 1
+        return {k: c / n for k, c in counts.items()}
+
+    def test_anomaly_about_one_percent_at_any_level(self):
+        for level in (0, 4, 6):
+            self.assertAlmostEqual(self.share(level)["anomaly"], 0.01, delta=0.002, msg=level)
+
+    def test_close_friend_gated_by_level(self):
+        self.assertNotIn("close_friend", self.share(3, n=20000))
+        rng = random.Random(5)
+        seen = {lines_mod.pick(self.lines, "meme", 4, rng) for _ in range(20000)}
+        new = "你来了？正好，帮本喵把那个杯子推下去。"
+        self.assertIn(new, seen)
+
+    def test_all_meme_pools_reachable(self):
+        self.assertEqual(set(self.share(4, n=50000)), set(self.lines["groups"]["meme"]))
+
+    def test_songs_include_still_works(self):
+        from responses import CHAT_RESPONSES
+        songs = self.lines["groups"]["meme"]["songs"]
+        self.assertEqual(songs["include_chat_responses"], "玉猫唱歌")
+        self.assertTrue(set(CHAT_RESPONSES["玉猫唱歌"]) <= set(songs["entries"]))
+
+    def test_other_groups_unaffected(self):
+        rng = random.Random(1)
+        reminder = {lines_mod.pick(self.lines, "reminder", 6, rng) for _ in range(500)}
+        self.assertTrue(all("{mention}" in r for r in reminder))
+        comeback = set(sum((p["entries"] for p in self.lines["groups"]["comeback"].values()), []))
+        self.assertTrue({lines_mod.pick(self.lines, "comeback", 6, rng) for _ in range(200)} <= comeback)
+
+
 # ---------------------------------------------------------------- 服务层
 
 class Clock:
@@ -267,6 +353,18 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.clock.set_local(2026, 10, 3, 0, 1)
         p, r, today = await self.svc.checkin(G1, 1)
         self.assertEqual((today, r.counted, p.streak_count), (date(2026, 10, 3), True, 2))
+
+    async def test_concurrent_pets_milestone_once(self):
+        for d in range(1, 7):
+            await self.checkin_on(9, d)
+        self.clock.set_local(2026, 10, 7, 12, 0)
+
+        async def pet():
+            p, r, today = await self.svc.checkin(G1, 9)
+            return self.svc.checkin_message(9, p, r, today)
+        messages = await asyncio.gather(*(pet() for _ in range(20)))
+        self.assertEqual(sum("🏆" in m for m in messages), 1)
+        self.assertEqual(self.svc.progress[f"{G1}:9"].streak_count, 7)
 
     async def test_concurrent_pets_count_once(self):
         self.clock.set_local(2026, 10, 1, 12, 0)

@@ -45,7 +45,12 @@ def checkin_message(user_id: int, p: Progress, result: CheckinResult, today: dat
 
     head = "✅ 今日撸猫成功" if result.counted else "今天已经撸过啦"
     status = f"-# {head} · {streak_text(streak)} · {level_text(lv)}（累计 {p.total_checkin_days} 天）"
-    parts = [f"<@{user_id}> {event}", meme, status]
+    parts = [f"<@{user_id}> {event}"]
+    # 里程碑：只在当天首次有效签到、连续天数恰好命中时出现（重复撸 counted=False 不会触发）
+    milestone = lines_mod.milestone_line(lines, streak, rng) if result.counted else None
+    if milestone:
+        parts.append("🏆 " + lines_mod.render(milestone, streak=streak, level_name=lv.name if lv else ""))
+    parts += [meme, status]
     if result.level_up and lv:
         parts.append(f"-# 🎉 亲密等级提升：{level_text(lv)} —— {lv.description}")
     return "\n".join(parts)
