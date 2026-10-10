@@ -13,6 +13,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # 小游戏扩展
 EXTENSIONS = [
     'minigames.drinking_contest',
+    'minigames.potato_heist',
 ]
 
 

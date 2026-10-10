@@ -4,20 +4,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import discord
 
+from ..common import PROJECT_ROOT, channel_allowed, write_json_atomic
 from . import engine, renderer, views
 from .models import Action, DrinkingGame, GameStatus, PlayerState, PlayerStatus
 
 log = logging.getLogger(__name__)
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 MSG_NOT_PARTICIPANT = "你没参加本次比赛"
 MSG_ALREADY_JOINED = "你已经加入本次酒局"
@@ -34,13 +31,6 @@ MSG_CHANNEL_NOT_ALLOWED = "这里不能开酒局哦，请到 {channels} 或其�
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def channel_allowed(channel, allowed_ids) -> bool:
-    """频道本身或其所在子区的父频道在白名单中即可。"""
-    if channel is None:
-        return False
-    return channel.id in allowed_ids or getattr(channel, "parent_id", None) in allowed_ids
 
 
 class DrinkingService:
@@ -62,12 +52,7 @@ class DrinkingService:
     # ------------------------------------------------------------------ 持久化
 
     def save(self) -> None:
-        data = {"games": [g.to_dict() for g in self.games.values()]}
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.state_path.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self.state_path)
+        write_json_atomic(self.state_path, {"games": [g.to_dict() for g in self.games.values()]})
 
     def _load(self) -> list[DrinkingGame]:
         if not self.state_path.exists():

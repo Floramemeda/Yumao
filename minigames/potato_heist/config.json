@@ -1,0 +1,14 @@
+{
+  "min_players": 3,
+  "max_players": 6,
+  "max_rounds": 10,
+  "round_timeout_seconds": 45,
+  "lobby_timeout_seconds": 1800,
+
+  "allowed_channel_ids": [
+    1545694742841397309,
+    1544878105594830888
+  ],
+
+  "state_file": "data/potato_heist_state.json"
+}
