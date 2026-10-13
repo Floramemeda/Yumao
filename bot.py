@@ -15,6 +15,7 @@ EXTENSIONS = [
     'minigames.drinking_contest',
     'minigames.potato_heist',
     'minigames.pet_spark',
+    'minigames.snowball_relay',
 ]
 
 

@@ -20,6 +20,12 @@ def thread_under(channel, parent_ids) -> bool:
     return getattr(channel, "parent_id", None) in parent_ids
 
 
+def is_admin(interaction) -> bool:
+    """服务器管理员：Administrator、管理服务器或管理消息权限。"""
+    perms = getattr(interaction, "permissions", None)
+    return bool(perms and (perms.administrator or perms.manage_guild or perms.manage_messages))
+
+
 def write_json_atomic(path: Path, data) -> None:
     """先写临时文件再替换，避免写到一半崩溃留下损坏的存档。"""
     path.parent.mkdir(parents=True, exist_ok=True)

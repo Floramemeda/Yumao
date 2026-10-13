@@ -1,0 +1,39 @@
+{
+  "min_players": 3,
+  "max_players": 6,
+  "turns_per_player": 2,
+  "lobby_timeout_seconds": 600,
+  "turn_timeout_seconds": 60,
+  "timeout_action": "steady",
+
+  "size_min": 1,
+  "size_max": 6,
+  "momentum_min": 0,
+  "momentum_max": 3,
+
+  "actions": {
+    "steady": {"distance": 100, "size_delta": [[1, 1.0]], "momentum": -1, "capture_mod": -0.05, "protection": 0, "debris": true, "hit_chance": 0},
+    "hard":   {"distance": 105, "size_delta": [[1, 0.5], [2, 0.5]], "momentum": 1, "capture_mod": 0.09, "protection": 0, "debris": true, "hit_chance": 0},
+    "aim":    {"distance": 95,  "size_delta": [[1, 0.5], [0, 0.5]], "momentum": 1, "capture_mod": 0.03, "protection": 0, "debris": true, "hit_chance": 0.5},
+    "repair": {"distance": 80,  "size_delta": [[0, 1.0]], "momentum": -2, "capture_mod": -0.10, "protection": -0.18, "debris": false, "hit_chance": 0}
+  },
+  "debris_chance": 0.4,
+
+  "capture": {
+    "base_by_size": [0, 0, 0.03, 0.09, 0.16, 0.25],
+    "per_momentum": 0.06,
+    "max": 0.65
+  },
+
+  "score": {
+    "per_meter": 1,
+    "per_size_level": 100,
+    "per_debris": 35,
+    "per_hit": 115,
+    "per_engulfed": 60
+  },
+
+  "allowed_channel_ids": [],
+
+  "state_file": "data/snowball_relay_state.json"
+}

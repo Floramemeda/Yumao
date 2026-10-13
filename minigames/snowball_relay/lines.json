@@ -1,0 +1,81 @@
+{
+  "fallback": "雪球咕噜咕噜滚了过去。",
+  "groups": {
+    "action_steady": {"default": {"entries": [
+      "⛄ {actor} 稳稳地一滚，雪球往前滚了 {distance} 米。",
+      "⛄ {actor} 不紧不慢地推了一把，雪球乖乖滚了 {distance} 米。",
+      "⛄ {actor} 用老司机的手法，把雪球送出去 {distance} 米。"
+    ]}},
+    "action_hard": {"default": {"entries": [
+      "💪 {actor} 猛地一推！雪球轰隆隆滚了 {distance} 米！",
+      "💪 {actor} 使出吃奶的力气！雪球冲出去 {distance} 米！",
+      "💪 {actor} 大喊一声「起！」，雪球狂奔 {distance} 米！"
+    ]}},
+    "action_aim": {"default": {"entries": [
+      "🎯 {actor} 眯起眼睛瞄准……推！雪球滚了 {distance} 米。",
+      "🎯 {actor} 舔了舔手指测风向，推出雪球滚了 {distance} 米。",
+      "🎯 {actor} 摆出斯诺克姿势，一杆推出 {distance} 米。"
+    ]}},
+    "action_repair": {"default": {"entries": [
+      "🧤 {actor} 拍拍补补，把雪球修圆了，慢悠悠滚了 {distance} 米。",
+      "🧤 {actor} 给雪球做了个按摩，它舒服地滚了 {distance} 米。",
+      "🧤 {actor} 小心翼翼地拍紧雪球，往前挪了 {distance} 米。"
+    ]}},
+    "auto": {"default": {"entries": [
+      "（{actor} 迟迟没有动静，系统替 TA 稳稳地推了一把）",
+      "（{actor} 好像睡着了，雪球自己滚了起来）"
+    ]}},
+    "size_up": {"default": {"entries": [
+      "雪球长到了 **Lv.{size}**！",
+      "雪球又胖了一圈，现在是 **Lv.{size}**！"
+    ]}},
+    "size_max": {"default": {"entries": [
+      "雪球已经是 **Lv.{size}** 的巨无霸了，再也胖不动了！",
+      "**Lv.{size}**！雪球大到挡住了太阳。"
+    ]}},
+    "debris": {"default": {"entries": [
+      "顺路卷走了一个{item}。",
+      "路边的{item}被吸进了雪球。",
+      "{item}：我只是路过的！（被卷走）"
+    ]}},
+    "hit": {"default": {"entries": [
+      "💥 正中目标！{item}被撞成了陀螺！",
+      "💥 砰！{item}原地起飞！",
+      "💥 完美命中，{item}碎成了一地雪花！"
+    ]}},
+    "aim_miss": {"default": {"entries": [
+      "……偏了，雪球擦着{item}滚了过去。",
+      "{item}灵巧地一闪，躲开了。"
+    ]}},
+    "engulf": {"default": {"entries": [
+      "🌀 {victim} 还没来得及接棒，就被卷进了雪球！",
+      "🌀 {victim} 伸手去接——然后整个人消失在雪球里了！",
+      "🌀 雪球一个急转弯，把 {victim} 卷了进去！"
+    ]}},
+    "near_miss": {"default": {"entries": [
+      "😰 {target} 差点被卷进去，侧身一闪躲开了！",
+      "😰 雪球擦着 {target} 的鼻尖滚过，好险！"
+    ]}},
+    "voice": {"default": {"entries": [
+      "🐱 雪球里传来一句：哈基米南北绿豆！",
+      "🐱 雪球里传来一句：放我出去……算了，这里挺暖和。",
+      "🐱 雪球里传来一句：曼波~曼波~",
+      "🐱 雪球里传来一句：我是谁？我在哪？我为什么在转？",
+      "🐱 雪球里传来一句：里面有人吗？哦，我就是那个人。"
+    ]}},
+    "debris_items": {"default": {"entries": [
+      "木桶", "扫帚", "雪人的胡萝卜鼻子", "路过的小板凳", "一只拖鞋", "灯笼", "晾衣竿", "糖葫芦摊", "一筐白菜", "猫窝"
+    ]}},
+    "hit_items": {"default": {"entries": [
+      "木桶", "雪人", "冰雕", "院门口的石狮子", "一排冰柱", "稻草人", "酒坛子", "风铃"
+    ]}},
+    "final_normal": {"default": {"entries": [
+      "雪球终于停了下来，所有人都累瘫在雪地里。",
+      "雪球轰隆一声撞上山脚，接力圆满结束！",
+      "最后一棒推出，雪球带着一路战利品冲向了终点！"
+    ]}},
+    "final_all_engulfed": {"default": {"entries": [
+      "全员滚蛋！雪球里装满了所有参赛者，它自己滚走了。"
+    ]}}
+  }
+}
