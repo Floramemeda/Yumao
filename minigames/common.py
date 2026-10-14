@@ -20,6 +20,22 @@ def thread_under(channel, parent_ids) -> bool:
     return getattr(channel, "parent_id", None) in parent_ids
 
 
+async def category_of(channel, client) -> int | None:
+    """频道所在分类的 id；子区取其父频道的分类（父频道不在缓存时向 Discord 拉取）。"""
+    if channel is None:
+        return None
+    parent_id = getattr(channel, "parent_id", None)
+    if parent_id is None:
+        return getattr(channel, "category_id", None)
+    parent = client.get_channel(parent_id)
+    if parent is None:
+        try:
+            parent = await client.fetch_channel(parent_id)
+        except Exception:
+            return None
+    return getattr(parent, "category_id", None)
+
+
 def is_admin(interaction) -> bool:
     """服务器管理员：Administrator、管理服务器或管理消息权限。"""
     perms = getattr(interaction, "permissions", None)

@@ -33,7 +33,9 @@
     "per_engulfed": 60
   },
 
-  "allowed_channel_ids": [],
+  "allowed_category_ids": [
+    1544210788577706064
+  ],
 
   "state_file": "data/snowball_relay_state.json"
 }

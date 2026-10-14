@@ -14,7 +14,8 @@ from minigames.snowball_relay.models import Status
 from minigames.snowball_relay.service import SnowballService
 
 CFG = engine.load_config()
-CHANNEL_ID = 4242  # 不限制频道：任意频道都能开局
+CHANNEL_ID = 4242
+CATEGORY_ID = CFG["allowed_category_ids"][0]
 
 
 class FakeMessage:
@@ -31,6 +32,7 @@ class FakeMessage:
 class FakeChannel:
     def __init__(self):
         self.id = CHANNEL_ID
+        self.category_id = CATEGORY_ID
         self.sent = []          # (content, embed dict, allowed_mentions)
         self.removed = []
         self.fail = False
@@ -53,9 +55,18 @@ class FakeChannel:
 class FakeBot:
     def __init__(self, channel):
         self.channel = channel
+        self.cached = {}        # 其他已缓存频道
+        self.fetchable = {}     # 只能通过 fetch 拿到的频道
 
     def get_channel(self, cid):
-        return self.channel
+        if cid in self.cached:
+            return self.cached[cid]
+        return self.channel if cid == self.channel.id else None
+
+    async def fetch_channel(self, cid):
+        if cid in self.fetchable:
+            return self.fetchable[cid]
+        raise discord.NotFound(NS(status=404, reason="nf"), "nf")
 
     async def wait_until_ready(self):
         pass
@@ -131,6 +142,38 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def play_out(self, s, action="steady"):
         while s.status == Status.IN_PROGRESS:
             await self.act(s.current_actor_id, action, s=s)
+
+    # ---- 频道限制
+
+    async def try_create(self, channel_obj):
+        it = self.it(1)
+        it.channel, it.channel_id = channel_obj, channel_obj.id
+        await self.svc.create_game(it)
+        return it.replies[-1] if it.replies else None
+
+    async def test_category_restriction(self):
+        bot = self.svc.bot
+        bot.cached[501] = NS(id=501, category_id=CATEGORY_ID)       # 分类下的频道（已缓存）
+        bot.fetchable[502] = NS(id=502, category_id=CATEGORY_ID)    # 分类下的论坛/频道（需拉取）
+        bot.cached[503] = NS(id=503, category_id=12345)             # 其他分类
+        cases = [
+            ("分类下的频道", NS(id=601, category_id=CATEGORY_ID), True),
+            ("分类下频道的子区", NS(id=602, parent_id=501), True),
+            ("父频道需拉取的子区", NS(id=603, parent_id=502), True),
+            ("其他分类的频道", NS(id=604, category_id=12345), False),
+            ("其他分类的子区", NS(id=605, parent_id=503), False),
+            ("不在任何分类", NS(id=606, category_id=None), False),
+            ("父频道拿不到的子区", NS(id=607, parent_id=999), False),
+        ]
+        for desc, ch, ok in cases:
+            with self.subTest(desc):
+                before = len(self.svc.sessions)
+                reply = await self.try_create(ch)
+                if ok:
+                    self.assertEqual(len(self.svc.sessions), before + 1)
+                else:
+                    self.assertIn("分类下的频道或子区", reply)
+                    self.assertEqual(len(self.svc.sessions), before)
 
     # ---- 报名
 

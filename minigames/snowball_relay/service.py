@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import discord
 
-from ..common import PROJECT_ROOT, channel_allowed, is_admin, write_json_atomic
+from ..common import PROJECT_ROOT, category_of, is_admin, write_json_atomic
 from . import engine, renderer, views
 from .models import TERMINAL, SnowballSession, Status
 
@@ -34,7 +34,7 @@ MSG_NOT_YOUR_TURN = "尚未轮到你"
 MSG_ENGULFED = "你已经被卷进雪球里了，只能看大家继续推啦"
 MSG_STALE = "这一棒已经结束了"
 MSG_CHANNEL_BUSY = "本频道已经有一局超级滚雪球了。"
-MSG_CHANNEL_NOT_ALLOWED = "这里不能开超级滚雪球哦，请到 {channels} 或其子区里开"
+MSG_CHANNEL_NOT_ALLOWED = "这里不能开超级滚雪球哦，请到 {categories} 分类下的频道或子区里开"
 
 REPORT_MAX_ATTEMPTS = 3
 REPORT_RETRY_SECONDS = 15
@@ -217,11 +217,12 @@ class SnowballService:
     # ------------------------------------------------------------------ 报名
 
     async def create_game(self, interaction: discord.Interaction) -> None:
-        allowed = self.cfg.get("allowed_channel_ids") or []
-        # 白名单为空 = 不限制频道
-        if allowed and not channel_allowed(interaction.channel, allowed):
-            channels = "、".join(f"<#{cid}>" for cid in allowed)
-            await interaction.response.send_message(MSG_CHANNEL_NOT_ALLOWED.format(channels=channels), ephemeral=True)
+        allowed = self.cfg.get("allowed_category_ids") or []
+        # 只允许指定分类下的频道及其子区；列表为空 = 不限制
+        if allowed and await category_of(interaction.channel, self.bot) not in allowed:
+            categories = "、".join(f"<#{cid}>" for cid in allowed)
+            await interaction.response.send_message(MSG_CHANNEL_NOT_ALLOWED.format(categories=categories),
+                                                    ephemeral=True)
             return
         async with self._create_lock:
             if interaction.channel_id in self.by_channel:
