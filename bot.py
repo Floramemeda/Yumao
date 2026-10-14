@@ -16,6 +16,7 @@ EXTENSIONS = [
     'minigames.potato_heist',
     'minigames.pet_spark',
     'minigames.snowball_relay',
+    'minigames.admin_reminder',
 ]
 
 
