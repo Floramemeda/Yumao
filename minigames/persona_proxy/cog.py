@@ -483,14 +483,16 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
             profile = self.service.require_speaker(gid, uid, role_ids(interaction), d["profile_id"])
             check_channel(interaction)
             channel = interaction.channel
+            ping = None
             if d["kind"] == "showcase":
                 self._check_display_channel(interaction)
             elif d["kind"] == "reply":
                 try:
-                    await channel.fetch_message(int(d["reply_to"]["message_id"]))
+                    target = await channel.fetch_message(int(d["reply_to"]["message_id"]))
                 except discord.HTTPException:
                     raise PersonaError("原消息已经不可访问了，不能回复。")
-                content = self.service.validate_message(ui.reply_content(d["reply_to"]["jump_url"], d["text"]))
+                header, ping = ui.reply_header(target, d["reply_to"]["jump_url"])
+                content = self.service.validate_message(ui.reply_content(header, d["text"]))
             else:
                 content = self.service.validate_message(d["text"])
 
@@ -505,7 +507,7 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
                     sent_ids.append(second)
                     d = await self.service.finish(gid, d["id"], SENT, [second], sent_parts=2, profile_id=profile["id"])
             else:
-                mid = await self.sender.send(channel, profile, content)
+                mid = await self.sender.send(channel, profile, content, mention_user_id=ping)
                 sent_ids.append(mid)
                 d = await self.service.finish(gid, d["id"], SENT, [mid], profile_id=profile["id"])
         except PersonaError as e:

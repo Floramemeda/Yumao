@@ -94,8 +94,14 @@ class WebhookSender:
                 await self.on_new_webhook(parent.guild.id, parent.id, found.id)
         return found
 
-    async def send(self, channel, profile: dict, content: str) -> int:
-        """以皮套身份发送一条消息，返回消息 id。"""
+    async def send(self, channel, profile: dict, content: str, mention_user_id: int | None = None) -> int:
+        """以皮套身份发送一条消息，返回消息 id。
+
+        默认不提醒任何人；mention_user_id 只用于「回复」时提醒被回复者本人，正文里的其他 @ 仍然不提醒。
+        """
+        allowed = (discord.AllowedMentions(everyone=False, roles=False, replied_user=False,
+                                           users=[discord.Object(mention_user_id)])
+                   if mention_user_id else discord.AllowedMentions.none())
         parent, thread = await self.resolve(channel)
         for attempt in (0, 1):
             try:
@@ -105,7 +111,7 @@ class WebhookSender:
             except discord.HTTPException as e:
                 raise SendFailed(f"获取 Webhook 失败（{e.status}）。")
             kwargs = dict(username=profile["name"], avatar_url=profile["avatar_url"],
-                          allowed_mentions=discord.AllowedMentions.none(), wait=True)
+                          allowed_mentions=allowed, wait=True)
             if thread is not None:
                 kwargs["thread"] = thread
             try:

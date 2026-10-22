@@ -17,7 +17,7 @@
   "avatar_url_max_length": 1024,
   "description_max_length": 2000,
   "message_max_length": 2000,
-  "reply_text_max_length": 1800,
+  "reply_text_max_length": 1700,
 
   "blocked_name_words": ["discord", "clyde", "系统", "官方", "管理员", "admin", "moderator", "造化玉猫"],
   "webhook_name": "玉猫皮套",

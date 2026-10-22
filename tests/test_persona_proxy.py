@@ -184,13 +184,18 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
 class FakeTextChannel(discord.TextChannel):
     def __init__(self, cid, messages=()):
+        """messages：可回复的消息 id 集合，或 {id: 消息对象}；集合里的消息默认是真人 55 发的。"""
         self.id = cid
-        self.messages = set(messages)
+        self.messages = dict(messages) if isinstance(messages, dict) else {m: human_msg(m) for m in messages}
 
     async def fetch_message(self, mid):
         if mid not in self.messages:
             raise discord.NotFound(NS(status=404, reason="nf"), "nf")
-        return NS(id=mid)
+        return self.messages[mid]
+
+
+def human_msg(mid, uid=55):
+    return NS(id=mid, webhook_id=None, author=NS(id=uid, bot=False, display_name=f"玩家{uid}"))
 
 
 class FakeThread(discord.Thread):
@@ -211,17 +216,19 @@ class FakeThread(discord.Thread):
 class FakeSender:
     def __init__(self):
         self.sent = []
+        self.mentions = []
         self.fail_on: dict[int, Exception] = {}
         self.locks = {}
 
     def channel_lock(self, cid):
         return self.locks.setdefault(cid, asyncio.Lock())
 
-    async def send(self, channel, profile, content):
+    async def send(self, channel, profile, content, mention_user_id=None):
         exc = self.fail_on.pop(len(self.sent), None)
         if exc:
             raise exc
         self.sent.append((channel.id, profile["name"], profile["avatar_url"], content))
+        self.mentions.append(mention_user_id)
         return 10_000 + len(self.sent)
 
 
@@ -437,8 +444,22 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
         sub = submit(sel.modal.custom_id, "回你一句")
         await self.cog.on_interaction(sub)
         content = self.sender.sent[0][3]
-        self.assertTrue(content.startswith(f"-# ↪️ 回复 https://discord.com/channels/{G}/{CH}/42\n"))
-        self.assertTrue(content.endswith("回你一句"))
+        self.assertIn(f"回复 <@55>：[原消息](https://discord.com/channels/{G}/{CH}/42)\n", content)
+        self.assertEqual(content.split("\n", 1)[1], "回你一句")
+        self.assertEqual(self.sender.mentions, [55])                             # 只提醒被回复的真人
+
+    async def test_reply_to_persona_or_bot_does_not_ping(self):
+        p = await self.profile()
+        targets = {
+            61: NS(id=61, webhook_id=9000, author=NS(id=9000, bot=True, display_name="释*无相*")),   # 皮套消息
+            62: NS(id=62, webhook_id=None, author=NS(id=1, bot=True, display_name="造化玉猫")),      # 机器人
+        }
+        for mid, name in ((61, r"**释\*无相\***"), (62, "**造化玉猫**")):
+            with self.subTest(mid):
+                sub = submit(f"pp:reply:{p['id']}:{mid}:n{mid}", "嗯", channel=FakeTextChannel(CH, messages=targets))
+                await self.cog.on_interaction(sub)
+                self.assertIn(f"回复 {name}：[原消息]", self.sender.sent[-1][3])
+                self.assertIsNone(self.sender.mentions[-1])
 
     async def test_reply_target_gone_keeps_draft(self):
         p = await self.profile()
@@ -584,6 +605,9 @@ class ChannelAndWebhookTests(unittest.IsolatedAsyncioTestCase):
         await s.send(parent, prof, "三")
         self.assertEqual(len(created), 2)
         self.assertEqual(sent[-1][1], "三")
+        await s.send(parent, prof, "四 @everyone <@&1>", mention_user_id=55)        # 回复：只允许提醒被回复者
+        am = sent[-1][2]["allowed_mentions"]
+        self.assertEqual(([u.id for u in am.users], am.everyone, am.roles), ([55], False, False))
 
     async def test_bot_ignores_persona_webhook_messages(self):
         import bot as bot_module

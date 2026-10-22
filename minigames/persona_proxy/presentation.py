@@ -20,9 +20,21 @@ def profile_label(p: dict, disabled: bool = False) -> str:
     return label[:100]
 
 
-def reply_content(jump_url: str, text: str) -> str:
-    """V1 不做原生回复引用：在正文前加原消息跳转链接。"""
-    return f"-# ↪️ 回复 {jump_url}\n{text}"
+def reply_header(message, jump_url: str) -> tuple[str, int | None]:
+    """Webhook 无法发原生回复：用一行「回复 谁：[原消息](链接)」模拟。
+
+    返回 (首行, 需要提醒的用户 id)。只有被回复者是真人时才提醒；皮套（Webhook）或机器人消息只显示名字。
+    """
+    human = message.webhook_id is None and not message.author.bot
+    if human:
+        who, ping = f"<@{message.author.id}>", message.author.id
+    else:
+        who, ping = f"**{discord.utils.escape_markdown(message.author.display_name)}**", None
+    return f"-# ↪️ 回复 {who}：[原消息]({jump_url})", ping
+
+
+def reply_content(header: str, text: str) -> str:
+    return f"{header}\n{text}"
 
 
 def draft_label(d: dict, profile_name: str) -> str:
