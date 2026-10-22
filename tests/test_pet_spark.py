@@ -44,15 +44,52 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(sum(r.counted for r in results), 1)
         self.assertEqual((p.streak_count, p.total_checkin_days), (1, 1))
 
-    def test_break_resets_streak_keeps_best_total_level(self):
+    def test_break_resets_streak_and_spark_level(self):
         p = Progress(1, 1)
         for i in range(30):
             checkin(p, day(i), LEVELS)
-        self.assertEqual(level_for(p.total_checkin_days, LEVELS).name, "长明")
-        r = checkin(p, day(31), LEVELS)  # 断了第 30 天
+        self.assertEqual(level_for(current_streak(p, day(29)), LEVELS).name, "长明")
+        self.assertEqual(level_for(current_streak(p, day(30)), LEVELS).name, "长明")   # 昨天签过，今天还没断
+        self.assertIsNone(level_for(current_streak(p, day(31)), LEVELS))              # 断签：Lv.0
+        r = checkin(p, day(31), LEVELS)
         self.assertTrue(r.comeback)
+        self.assertTrue(r.level_up)                                                   # Lv.0 → Lv.1
         self.assertEqual((p.streak_count, p.best_streak, p.total_checkin_days), (1, 30, 31))
-        self.assertEqual(level_for(p.total_checkin_days, LEVELS).name, "长明")
+        self.assertEqual(level_for(current_streak(p, day(31)), LEVELS).name, "初识")
+
+    def test_level_up_follows_streak(self):
+        p = Progress(1, 1)
+        ups = [i + 1 for i in range(8) if checkin(p, day(i), LEVELS).level_up]
+        self.assertEqual(ups, [1, 2, 7])                                              # 连续第 1/2/7 天升级
+
+    def test_status_and_message_show_spark_level(self):
+        lines = lines_mod.load_lines()
+        p = Progress(1, 1)
+        for i in range(8):
+            r = checkin(p, day(i), LEVELS)
+        msg = renderer.checkin_message(1, p, r, day(7), LEVELS, lines, random.Random(1))
+        self.assertIn("✅ 今日撸猫成功 · 🔥 火花 8 天 · 🔥 Lv.3 暖焰", msg)
+        self.assertNotIn("累计", msg)                                                  # 签到回复不再显示累计天数
+        fields = {f.name: f.value for f in renderer.status_embed(p, day(7), LEVELS, True).fields}
+        self.assertTrue(fields["火花等级"].startswith("🔥 Lv.3 暖焰"))
+        self.assertIn("再连续 6 天升到", fields["火花等级"])
+        embed = renderer.status_embed(p, day(10), LEVELS, True)                      # 断签后查看
+        fields = {f.name: f.value for f in embed.fields}
+        self.assertTrue(fields["火花等级"].startswith("Lv.0"))
+        self.assertEqual((fields["历史最高"], fields["累计撸猫"]), ("8 天", "8 天"))
+        self.assertIn("火花等级回到 0", embed.footer.text)
+
+    def test_comeback_lines_use_best_streak_level(self):
+        lines = {"groups": {"comeback": {"default": {"entries": ["普通"]},
+                                         "remembered": {"min_level": 3, "weight": 1000, "entries": ["记得{level_name}"]}},
+                            "meme": {"x": {"entries": ["喵"]}}}}
+        p = Progress(1, 1)
+        for i in range(10):
+            checkin(p, day(i), LEVELS)
+        r = checkin(p, day(20), LEVELS)
+        msg = renderer.checkin_message(1, p, r, day(20), LEVELS, lines, random.Random(1))
+        self.assertIn("记得暖焰", msg)                                              # 按历史最高 10 天 → Lv.3
+        self.assertIn("连续 1 天 · 🌱 Lv.1 初识", msg)                                   # 当前等级已重新从 1 开始
 
     def test_derived_streak_when_not_checked_in(self):
         p = Progress(1, 1)

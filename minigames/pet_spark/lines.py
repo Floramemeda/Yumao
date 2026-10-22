@@ -1,7 +1,7 @@
 """撸猫续火花：配置驱动的文案池。
 
 lines.json 结构：{"groups": {组名: {池名: 池}}, "fallback": 兜底文案}
-池：{"enabled": bool, "weight": 数字, "min_level": 亲密等级下限, "entries": [文案],
+池：{"enabled": bool, "weight": 数字, "min_level": 火花等级下限, "entries": [文案],
      "include_chat_responses": 可选，复用 responses.CHAT_RESPONSES 里某个关键词的回复}
 
 文案里只替换白名单占位符（{mention} {streak} {level_name}），

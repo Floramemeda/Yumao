@@ -44,7 +44,7 @@ class PetSpark(commands.Cog, name=views.COG_NAME):
     async def pet(self, interaction: discord.Interaction):
         await self.do_pet(interaction)
 
-    @app_commands.command(name="火花", description="查看你的撸猫火花、亲密等级，开关 22:00 催撸")
+    @app_commands.command(name="火花", description="查看你的撸猫火花、火花等级，开关 22:00 催撸")
     @app_commands.guild_only()
     async def spark(self, interaction: discord.Interaction):
         p, today = self.service.status(interaction.guild_id, interaction.user.id)

@@ -211,7 +211,7 @@ class PetSparkService:
                            if date.fromisoformat(k.rsplit(":", 1)[1]) >= keep_from}
 
     def _reminder_line(self, p: Progress, today: date) -> str:
-        lv = level_for(p.total_checkin_days, self.levels)
+        lv = level_for(p.streak_count, self.levels)   # 催撸对象昨天刚签过，streak_count 就是当前连续天数
         text = lines_mod.pick(self.lines, "reminder", lv.level if lv else 0, self.rng)
         mention = f"<@{p.user_id}>"
         if "{mention}" not in text:

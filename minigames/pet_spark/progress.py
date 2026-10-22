@@ -1,4 +1,4 @@
-"""撸猫续火花：签到、连续火花、亲密等级、催撸判定。纯逻辑，不依赖 Discord。
+"""撸猫续火花：签到、连续火花、火花等级、催撸判定。纯逻辑，不依赖 Discord。
 
 所有"今天/昨天"都是 Guild 本地日期，由调用方按配置时区算好传入。
 """
@@ -66,17 +66,17 @@ def parse_levels(raw: list[dict]) -> list[Level]:
     return sorted(levels, key=lambda lv: lv.threshold)
 
 
-def level_for(total_days: int, levels: list[Level]) -> Level | None:
-    """亲密等级只看累计有效签到天数；未达到最低门槛返回 None。"""
+def level_for(days: int, levels: list[Level]) -> Level | None:
+    """天数对应的火花等级（调用方传入当前连续天数）；未达到最低门槛返回 None，即 Lv.0。"""
     current = None
     for lv in levels:
-        if total_days >= lv.threshold:
+        if days >= lv.threshold:
             current = lv
     return current
 
 
-def next_level(total_days: int, levels: list[Level]) -> Level | None:
-    return next((lv for lv in levels if lv.threshold > total_days), None)
+def next_level(days: int, levels: list[Level]) -> Level | None:
+    return next((lv for lv in levels if lv.threshold > days), None)
 
 
 def current_streak(p: Progress, today: date) -> int:
@@ -106,7 +106,8 @@ def checkin(p: Progress, today: date, levels: list[Level], now: datetime | None 
     if last == today:
         return CheckinResult(counted=False)
 
-    before_level = level_for(p.total_checkin_days, levels)
+    # 火花等级跟随当前连续天数：断签后从 0 重新算
+    before_level = level_for(p.streak_count if last == today - timedelta(days=1) else 0, levels)
     first_ever = last is None
     comeback = last is not None and last < today - timedelta(days=1)
 
@@ -118,7 +119,7 @@ def checkin(p: Progress, today: date, levels: list[Level], now: datetime | None 
     if p.created_at is None:
         p.created_at = now
 
-    after_level = level_for(p.total_checkin_days, levels)
+    after_level = level_for(p.streak_count, levels)
     return CheckinResult(
         counted=True,
         first_ever=first_ever,

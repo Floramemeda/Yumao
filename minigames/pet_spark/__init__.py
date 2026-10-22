@@ -1,4 +1,4 @@
-"""撸猫续火花 — 每日撸猫签到、连续火花、亲密等级与 22:00 催撸。"""
+"""撸猫续火花 — 每日撸猫签到、连续火花、火花等级与 22:00 催撸。"""
 from discord.ext import commands
 
 from .cog import PetSpark
