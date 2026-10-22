@@ -1,0 +1,25 @@
+{
+  "guilds": {
+    "1541312608114581576": {
+      "enabled": true,
+      "write_channel_id": 1544878105594830888
+    },
+    "1231230123186061422": {
+      "enabled": true,
+      "write_channel_id": 1238157595001491549
+    },
+    "1413744841304571988": {
+      "enabled": true,
+      "write_channel_id": 1490975347502743612
+    }
+  },
+
+  "max_results": 5,
+  "max_entry_length": 1000,
+  "max_query_length": 100,
+  "max_entries_per_guild": 10000,
+  "write_cooldown_seconds": 300,
+  "read_cooldown_seconds": 60,
+
+  "data_dir": "data/cat_diary"
+}

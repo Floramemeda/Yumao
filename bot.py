@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import config
 import responses
+from minigames.cat_diary.text import parse_write
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -17,6 +18,7 @@ EXTENSIONS = [
     'minigames.pet_spark',
     'minigames.snowball_relay',
     'minigames.admin_reminder',
+    'minigames.cat_diary',
 ]
 
 
@@ -42,6 +44,10 @@ async def on_ready():
 async def on_message(message):
     # 忽略自己和私信
     if message.author == bot.user or message.guild is None:
+        return
+
+    # 「记笔记 @玉猫 …」交给喵咪日事本（cat_diary 的监听器），不再触发聊天关键词和找人
+    if parse_write(message.content, bot.user.id) is not None:
         return
 
     # 处理中文对话频道消息（不要求提及机器人）
