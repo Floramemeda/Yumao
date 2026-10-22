@@ -3,6 +3,7 @@ from discord.ext import commands
 import config
 import responses
 from minigames.cat_diary.text import parse_write
+from minigames.persona_proxy.webhook_sender import is_persona_webhook
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -19,6 +20,7 @@ EXTENSIONS = [
     'minigames.snowball_relay',
     'minigames.admin_reminder',
     'minigames.cat_diary',
+    'minigames.persona_proxy',
 ]
 
 
@@ -44,6 +46,10 @@ async def on_ready():
 async def on_message(message):
     # 忽略自己和私信
     if message.author == bot.user or message.guild is None:
+        return
+
+    # 玉猫皮套代发的消息不触发任何自动回复
+    if is_persona_webhook(message.webhook_id):
         return
 
     # 「记笔记 @玉猫 …」交给喵咪日事本（cat_diary 的监听器），不再触发聊天关键词和找人

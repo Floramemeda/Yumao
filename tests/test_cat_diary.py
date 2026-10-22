@@ -393,7 +393,7 @@ class BotRoutingTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(content),                     mock.patch.object(type(bot_module.bot), "user", new=me),                     mock.patch.object(bot_module.responses, "handle_category_chat",
                                       new=mock.AsyncMock(return_value=False)) as chat,                     mock.patch.object(bot_module.responses, "handle_mention", new=mock.AsyncMock()) as mention,                     mock.patch.object(bot_module.bot, "process_commands", new=mock.AsyncMock()):
                 msg = NS(content=content, author=NS(id=1), guild=NS(id=bot_module.config.PERSONA_GUILD_ID),
-                         mentions=[me])
+                         mentions=[me], webhook_id=None)
                 await bot_module.on_message(msg)
                 self.assertEqual(chat.await_count == 1, expect_legacy)
                 self.assertEqual(mention.await_count == 1, expect_legacy)

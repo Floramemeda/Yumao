@@ -1,0 +1,26 @@
+{
+  "guilds": {
+    "1541312608114581576": {
+      "enabled": true,
+      "allowed_role_ids": [1555626372133818479, 1541312990186573884],
+      "unlimited_role_ids": [1541312990186573884],
+      "profile_display_channel_id": 1561559074426982400,
+      "creation_log_thread_id": 1562731344126152714
+    }
+  },
+
+  "default_profile_limit": 1,
+  "max_profile_limit": 50,
+  "draft_retention_days": 30,
+
+  "name_max_length": 80,
+  "avatar_url_max_length": 1024,
+  "description_max_length": 2000,
+  "message_max_length": 2000,
+  "reply_text_max_length": 1800,
+
+  "blocked_name_words": ["discord", "clyde", "系统", "官方", "管理员", "admin", "moderator", "造化玉猫"],
+  "webhook_name": "玉猫皮套",
+
+  "data_dir": "data/persona_proxy"
+}
