@@ -279,7 +279,18 @@ class ReadTests(DiaryTestBase):
         await self.note("别的事", author=1)
 
     def contents(self, it):
-        return [e.description for m in it.sent for e in m.embeds]
+        """取出每条笔记正文（去掉「* 」和作者前缀）。"""
+        out = []
+        for m in it.sent:
+            for e in m.embeds:
+                for line in e.description.split("\n"):
+                    if line.startswith("* "):
+                        out.append(re.sub(r"^\*\*.*?\*\*：", "", line[2:]))
+        return out
+
+    def authors(self, it):
+        return [re.match(r"\* \*\*(.*?)\*\*：", line).group(1)
+                for m in it.sent for e in m.embeds for line in e.description.split("\n") if line.startswith("* ")]
 
     async def test_four_combinations(self):
         await self.seed()
@@ -325,18 +336,17 @@ class ReadTests(DiaryTestBase):
         await self.note("我走了但笔记还在", author=404)
         await self.note("老成员的笔记", author=405)
         it = await self.read(user=404, uid=40)
-        self.assertEqual(it.sent[0].content, "📔 **用户404 记录了：**")
-        self.assertEqual(self.contents(it), ["我走了但笔记还在"])
+        self.assertEqual(it.sent[0].embeds[0].title, "📔【用户404】")
+        self.assertEqual(it.sent[0].embeds[0].description, "* 我走了但笔记还在")       # 指定某人：不重复作者
         it = await self.read(uid=41, members={1})
-        authors = [e.author.name for m in it.sent for e in m.embeds]
-        self.assertEqual(authors, ["旧成员405 记录了：", "用户404 记录了："])
+        self.assertEqual(self.authors(it), ["旧成员405", "用户404"])
 
     async def test_rendering_safe_and_split(self):
         await self.note("**粗体** [链接](https://evil) > 引用", author=1)
         it = await self.read(uid=50)
         self.assertEqual(self.contents(it), [r"\*\*粗体\*\* \[链接](https://evil) > 引用"])  # 行中 > 不是引用
         self.assertEqual(render_results([{"user_id": "1", "content": "> 行首引用", "created_at": "2026-10-22T01:00:00Z"}],
-                                        {"1": "某人"}, None)[0]["embeds"][0].description, r"\> 行首引用")
+                                        {"1": "某人"}, None)[0]["embeds"][0].description, r"* **某人**：\> 行首引用")
         entries = [{"user_id": "1", "content": "喵" * 1000, "created_at": "2026-10-22T01:00:00Z"} for _ in range(5)]
         entries += [{"user_id": "1", "content": "**" * 500, "created_at": "2026-10-22T01:00:00Z"}]
         msgs = render_results(entries, {"1": "某人"}, None)
@@ -344,6 +354,29 @@ class ReadTests(DiaryTestBase):
         for m in msgs:
             self.assertLessEqual(sum(len(e) for e in m["embeds"]), 6000)
             self.assertLessEqual(len(m["embeds"]), 10)
+
+    async def test_single_embed_layout_and_titles(self):
+        await self.note("今天吃了薯餅", author=1)
+        await self.note("第二行\n第三行", author=2)
+        it = await self.read(uid=70, members={1, 2})
+        self.assertEqual(len(it.sent), 1)
+        self.assertEqual(len(it.sent[0].embeds), 1)                               # 合并成一个 Embed
+        e = it.sent[0].embeds[0]
+        self.assertEqual(e.title, "📔【最新笔记】")
+        self.assertEqual(e.description, "* **成员2**：第二行\n  第三行\n* **成员1**：今天吃了薯餅")
+        self.assertEqual((await self.read(text="薯饼", uid=71)).sent[0].embeds[0].title, "📔【薯饼】")
+        it = await self.read(user=1, text="薯餅", uid=72, members={1})
+        self.assertEqual(it.sent[0].embeds[0].title, "📔【成员1/薯餅】")
+        self.assertIsNone(it.sent[0].content)
+
+    async def test_five_long_notes_stay_in_one_message(self):
+        for i in range(5):
+            await self.note("喵" * 1000, author=1, mid=3000 + i)
+        it = await self.read(uid=80)
+        self.assertEqual(len(it.sent), 1)                                         # 超过单个 Embed 上限时接续到第二个 Embed
+        self.assertEqual(len(self.contents(it)), 5)
+        self.assertTrue(all(len(e.description) <= 4096 for e in it.sent[0].embeds))
+        self.assertLessEqual(sum(len(e) for e in it.sent[0].embeds), 6000)
 
     async def test_original_content_never_changed(self):
         await self.note("今天吃了薯餅ABC", author=1)
@@ -359,8 +392,10 @@ class IsolationTests(DiaryTestBase):
         await self.note("G2 的笔记", author=1, guild=G2)
         r = await self.write(f"记笔记 <@{BOT}> 写到 G2 频道", guild=G1, channel=CH2, mid=77)
         self.assertEqual(r, [])                                                  # 别的服务器的频道不算
-        self.assertEqual([e.description for m in (await self.read(guild=G1)).sent for e in m.embeds], ["G1 的笔记"])
-        self.assertEqual([e.description for m in (await self.read(guild=G2)).sent for e in m.embeds], ["G2 的笔记"])
+        self.assertEqual([e.description for m in (await self.read(guild=G1)).sent for e in m.embeds],
+                         ["* **旧成员1**：G1 的笔记"])
+        self.assertEqual([e.description for m in (await self.read(guild=G2)).sent for e in m.embeds],
+                         ["* **旧成员1**：G2 的笔记"])
         self.assertEqual(len(self.entries(G1)), 1)
         self.assertEqual(len(self.entries(G2)), 1)
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 
 import discord
@@ -44,17 +43,43 @@ def safe_text(s: str) -> str:
     return discord.utils.escape_markdown(s)
 
 
-def render_results(entries: list[dict], names: dict[str, str], target_user_id: int | None) -> list[dict]:
-    """把至多 N 条结果渲染成一条或多条公开消息（kwargs 列表），Embed 超限时拆分。"""
+DESC_LIMIT = 4000     # 单个 Embed 描述上限 4096，留余量
+
+
+def result_title(names: dict[str, str], target_user_id: int | None, text: str | None) -> str:
+    parts = []
+    if target_user_id is not None:
+        parts.append(names[str(target_user_id)])
+    if text:
+        parts.append(text)
+    return f"📔【{'/'.join(parts) or '最新笔记'}】"
+
+
+def render_results(entries: list[dict], names: dict[str, str], target_user_id: int | None,
+                   text: str | None = None) -> list[dict]:
+    """结果合并成一个 Embed：标题【某人/关键字】，每条笔记一行「* 」。
+
+    只有内容超过单个 Embed 上限时才接续到下一个 Embed（同一条消息内，必要时再拆消息），从不截断。
+    """
     if not entries:
         return [{"content": MSG_NOTHING}]
-    embeds = []
+    color = discord.Color.from_rgb(255, 200, 120)
+    bullets = []
     for e in entries:
-        embed = discord.Embed(description=safe_text(e["content"]), color=discord.Color.from_rgb(255, 200, 120),
-                              timestamp=datetime.fromisoformat(e["created_at"].replace("Z", "+00:00")))
+        body = safe_text(e["content"]).replace("\n", "\n  ")   # 多行笔记缩进，留在同一个列表项里
         if target_user_id is None:
-            embed.set_author(name=f"{names[e['user_id']]} 记录了：")
-        embeds.append(embed)
+            body = f"**{safe_text(names[e['user_id']])}**：{body}"
+        bullets.append(f"* {body}")
+
+    embeds, current = [], ""
+    for b in bullets:
+        if current and len(current) + 1 + len(b) > DESC_LIMIT:
+            embeds.append(discord.Embed(description=current, color=color))
+            current = b
+        else:
+            current = f"{current}\n{b}" if current else b
+    embeds.append(discord.Embed(description=current, color=color))
+    embeds[0].title = result_title(names, target_user_id, text)
 
     messages, batch, size = [], [], 0
     for embed in embeds:
@@ -65,8 +90,6 @@ def render_results(entries: list[dict], names: dict[str, str], target_user_id: i
         batch.append(embed)
         size += n
     messages.append({"embeds": batch})
-    if target_user_id is not None:
-        messages[0]["content"] = f"📔 **{safe_text(names[str(target_user_id)])} 记录了：**"
     return messages
 
 
@@ -149,7 +172,7 @@ class CatDiary(commands.Cog, name="CatDiary"):
 
         ids = {e["user_id"] for e in res.entries} | ({str(user.id)} if user else set())
         names = {uid: await self._display_name(interaction.guild, int(uid)) for uid in ids}
-        for msg in render_results(res.entries, names, user.id if user else None):
+        for msg in render_results(res.entries, names, user.id if user else None, text):
             await self._followup(interaction, msg)
 
     async def _followup(self, interaction: discord.Interaction, kwargs: dict) -> None:
