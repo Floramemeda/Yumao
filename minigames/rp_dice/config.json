@@ -1,0 +1,28 @@
+{
+  "dice_limits": {
+    "min_count": 1,
+    "max_count": 20,
+    "min_sides": 2,
+    "max_sides": 1000,
+    "max_threshold": 20000
+  },
+  "roll_cooldown_seconds": 2,
+
+  "guilds": {
+    "1541312608114581576": {
+      "roll_channel_ids": [1564068361711783976],
+      "dm_role_ids": [1564069031374495774]
+    }
+  },
+
+  "stat_min": 0,
+  "stat_max": 100,
+  "initial_sanity": 100,
+  "initial_heat": 0,
+  "default_progress_max": 10,
+  "max_progress_max": 100,
+  "max_players": 25,
+  "condition_max_length": 50,
+
+  "data_dir": "data/rp_dice"
+}

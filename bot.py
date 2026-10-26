@@ -21,6 +21,7 @@ EXTENSIONS = [
     'minigames.admin_reminder',
     'minigames.cat_diary',
     'minigames.persona_proxy',
+    'minigames.rp_dice',
 ]
 
 
