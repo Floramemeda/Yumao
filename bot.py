@@ -23,6 +23,7 @@ EXTENSIONS = [
     'minigames.persona_proxy',
     'minigames.rp_dice',
     'minigames.keyword_alert',
+    'minigames.trick_or_treat',
 ]
 
 

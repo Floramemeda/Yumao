@@ -1,0 +1,7 @@
+{
+  "allow_late_join_default": true,
+  "outbox_retry_seconds": 60,
+  "outbox_max_retries": 20,
+  "history_check_limit": 50,
+  "data_dir": "data/trick_or_treat"
+}
