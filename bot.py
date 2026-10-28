@@ -22,6 +22,7 @@ EXTENSIONS = [
     'minigames.cat_diary',
     'minigames.persona_proxy',
     'minigames.rp_dice',
+    'minigames.keyword_alert',
 ]
 
 

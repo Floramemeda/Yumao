@@ -1,0 +1,11 @@
+{
+  "watches": [
+    {
+      "guild_id": 1541312608114581576,
+      "forum_channel_ids": [1541318056490311731],
+      "keywords": ["私聊", "加好友", "加加"],
+      "alert_role_id": 1541312990186573884
+    }
+  ],
+  "cooldown_seconds_per_thread": 60
+}
