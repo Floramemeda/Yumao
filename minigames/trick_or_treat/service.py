@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..common import PROJECT_ROOT
-from .constants import (ACTIVE, ATTEMPTS_PER_PLAYER, CLOSED, FOUND, JOINED, PART_IDS, REGISTRATION,
-                        WITHDRAWN, label)
+from .constants import (ACTIVE, ATTEMPTS_PER_PLAYER, CLOSED, FOUND, JOINED, NICKNAME_MAX_LENGTH, PART_IDS,
+                        REGISTRATION, WITHDRAWN, label)
 from .store import StorageError, TotStore
 
 
@@ -26,6 +26,29 @@ def load_config() -> dict:
 
 
 # ---------------------------------------------------------------- 纯函数：从事件事实推导状态
+
+def clean_nickname(text: str | None) -> str | None:
+    """万圣节昵称：去首尾空白、合并内部空白；空串视为没填。"""
+    nick = " ".join((text or "").split())
+    if not nick:
+        return None
+    if len(nick) > NICKNAME_MAX_LENGTH:
+        raise TotError(f"万圣节昵称最多 {NICKNAME_MAX_LENGTH} 个字。")
+    return nick
+
+
+def find_player(event: dict, text: str) -> str | None:
+    """搜查目标输入 → 玩家 id：接受自动补全给的 id、<@id> 提及，或完整的万圣节昵称。"""
+    t = (text or "").strip()
+    digits = t.removeprefix("<@").removeprefix("!").removesuffix(">")
+    if digits.isdigit() and digits in event["players"]:
+        return digits
+    want = " ".join(t.split()).casefold()
+    for uid, p in event["players"].items():
+        if p.get("nickname") and p["nickname"].casefold() == want:
+            return uid
+    return None
+
 
 def hits(event: dict) -> list[dict]:
     return [s for s in event["searches"] if s["hit"]]
@@ -241,14 +264,17 @@ class TotService:
         """打开部位选择前的预检（提交时还会再检一次）。"""
         self._check_join(self._locate(self.store.load(guild_id), event_id), str(user_id))
 
-    async def join(self, guild_id: int, event_id: str, user_id: int, part: str) -> dict:
+    async def join(self, guild_id: int, event_id: str, user_id: int, part: str, nickname: str | None = None) -> dict:
         if part not in PART_IDS:
             raise TotError("没有这个藏糖部位。")
+        nick = clean_nickname(nickname)
         async with self.store.transaction(guild_id) as doc:
             event = self._locate(doc, event_id)
             uid = str(user_id)
             self._check_join(event, uid)
-            p = {"hiding_part": part, "attempts_remaining": event["config"]["attempts_per_player"],
+            if nick and any((p.get("nickname") or "").casefold() == nick.casefold() for p in event["players"].values()):
+                raise TotError(f"万圣节昵称「{nick}」已经有人用了，换一个吧。")
+            p = {"hiding_part": part, "nickname": nick, "attempts_remaining": event["config"]["attempts_per_player"],
                  "state": JOINED, "found_by": None, "joined_at": self._now(), "found_at": None,
                  "withdrawn_at": None}
             event["players"][uid] = p
@@ -358,4 +384,5 @@ class TotService:
 
 
 __all__ = ["TotService", "TotError", "StorageError", "load_config", "stats", "player_view", "matched_ids",
+           "clean_nickname", "find_player",
            "excluded_parts", "can_continue", "hits"]

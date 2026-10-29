@@ -13,9 +13,9 @@ from discord.ext import commands, tasks
 
 from ..common import channel_allowed
 from . import renderer as ui
-from .constants import BODY_PARTS, CLOSED
-from .service import StorageError, TotError, TotService
-from .views import ConfirmView, hide_view, panel_view
+from .constants import BODY_PARTS, CLOSED, JOINED
+from .service import StorageError, TotError, TotService, find_player
+from .views import ConfirmView, JoinModal, panel_view
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,25 @@ async def say(interaction: discord.Interaction, text: str | None = None, **kw) -
             await interaction.response.send_message(text, **kw)
     except discord.HTTPException as e:
         log.warning("不给糖就捣蛋：回复失败: %s", e)
+
+
+def modal_values(data: dict) -> dict[str, str]:
+    """从 Modal 提交的原始数据里取出输入框（value）和选择菜单（values[0]）的值，兼容 ActionRow / Label 结构。"""
+    out: dict[str, str] = {}
+
+    def walk(node):
+        if isinstance(node, dict):
+            if "custom_id" in node and "value" in node:
+                out[node["custom_id"]] = node["value"]
+            elif "custom_id" in node and "values" in node:
+                out[node["custom_id"]] = (node["values"] or [""])[0]
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk((data or {}).get("components", []))
+    return out
 
 
 def event_channels(event: dict) -> set[int]:
@@ -114,7 +133,7 @@ class TrickOrTreat(commands.Cog, name="TrickOrTreat"):
                             await self.service.mark_sent(guild_id, event["id"], item["id"], found)
                             continue
                     await self.service.mark_attempt(guild_id, event["id"], item["id"])
-                    msg = await ch.send(embed=ui.announcement(item), allowed_mentions=NO_PING)
+                    msg = await ch.send(embed=ui.announcement(item, event), allowed_mentions=NO_PING)
                 except StorageError:
                     return MSG_STORAGE
                 except (discord.HTTPException, RuntimeError) as e:
@@ -180,17 +199,27 @@ class TrickOrTreat(commands.Cog, name="TrickOrTreat"):
             return await say(interaction, MSG_STORAGE)
         except TotError as e:
             return await say(interaction, str(e))
-        await say(interaction, "🎃 选一个藏糖部位（只有你自己看得到，选定后不能修改）：", view=hide_view(eid))
+        await interaction.response.send_modal(JoinModal(eid))
 
-    async def handle_hide(self, interaction: discord.Interaction, eid: str, part: str):
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        """报名表提交（按 custom_id 接收，重启后也有效）。"""
+        if interaction.type != discord.InteractionType.modal_submit or interaction.guild_id is None:
+            return
+        parts = (interaction.data or {}).get("custom_id", "").split(":")
+        if len(parts) != 3 or parts[:2] != ["tot", "join"]:
+            return
+        values = modal_values(interaction.data)
+        part = values.get("part", "")
         try:
-            p = await self.service.join(interaction.guild_id, eid, interaction.user.id, part)
+            p = await self.service.join(interaction.guild_id, parts[2], interaction.user.id, part,
+                                        values.get("nickname"))
         except StorageError:
             return await say(interaction, MSG_STORAGE)
         except TotError as e:
-            return await interaction.response.edit_message(content=str(e), view=None)
-        log.info("不给糖就捣蛋：guild=%s 第 %s 轮新报名 user=%s", interaction.guild_id, eid, interaction.user.id)
-        await interaction.response.edit_message(content=ui.join_ok(part, p["attempts_remaining"]), view=None)
+            return await say(interaction, str(e))
+        log.info("不给糖就捣蛋：guild=%s 第 %s 轮新报名 user=%s", interaction.guild_id, parts[2], interaction.user.id)
+        await say(interaction, ui.join_ok(part, p["attempts_remaining"], p["nickname"]))
 
     # ------------------------------------------------------------------ 玩家指令
 
@@ -207,10 +236,9 @@ class TrickOrTreat(commands.Cog, name="TrickOrTreat"):
         await self.offer_join(interaction, event["id"])
 
     @tot.command(name="search", description="消耗 1 次机会，公开搜查一位玩家的某个部位")
-    @app_commands.describe(target="要搜查的玩家", part="搜查的部位")
+    @app_commands.describe(target="要搜查的玩家（按万圣节昵称 / 名字从列表里选）", part="搜查的部位")
     @app_commands.choices(part=PART_CHOICES)
-    async def cmd_search(self, interaction: discord.Interaction, target: discord.Member,
-                         part: app_commands.Choice[str]):
+    async def cmd_search(self, interaction: discord.Interaction, target: str, part: app_commands.Choice[str]):
         await interaction.response.defer(ephemeral=True, thinking=True)
         gid = interaction.guild_id
         try:
@@ -219,7 +247,10 @@ class TrickOrTreat(commands.Cog, name="TrickOrTreat"):
                 raise TotError("现在没有进行中的万圣夜活动。")
             if not channel_allowed(interaction.channel, event_channels(event)):
                 raise TotError(f"请在活动频道 <#{event['announcement_channel_id']}> 搜查。")
-            record, me, replay = await self.service.search(gid, interaction.user.id, target.id, part.value,
+            target_id = find_player(event, target)
+            if target_id is None:
+                raise TotError("找不到这位玩家，请从候选列表里选择（万圣节昵称要完整输入）。")
+            record, me, replay = await self.service.search(gid, interaction.user.id, int(target_id), part.value,
                                                            interaction.id)
         except StorageError:
             return await say(interaction, MSG_STORAGE)
@@ -229,7 +260,29 @@ class TrickOrTreat(commands.Cog, name="TrickOrTreat"):
             log.info("不给糖就捣蛋：guild=%s 搜查 %s hit=%s", gid, record["id"], record["hit"])
         note = await self.flush(gid)
         total = event["config"]["attempts_per_player"]
-        await say(interaction, ui.search_reply(record, me, total) + (f"\n{note}" if note else ""))
+        await say(interaction, ui.search_reply(event, record, me, total) + (f"\n{note}" if note else ""))
+
+    @cmd_search.autocomplete("target")
+    async def search_target_autocomplete(self, interaction: discord.Interaction, current: str):
+        """候选：本轮还能被搜的其他玩家，显示万圣节昵称（没填则显示服务器名字）。"""
+        try:
+            event = self.service.current_event(interaction.guild_id)
+        except StorageError:
+            return []
+        if event is None:
+            return []
+        want = current.strip().casefold()
+        out = []
+        for uid, p in event["players"].items():
+            if p["state"] != JOINED or uid == str(interaction.user.id):
+                continue
+            name = p.get("nickname")
+            if not name:
+                member = interaction.guild.get_member(int(uid)) if interaction.guild else None
+                name = member.display_name if member else f"玩家 {uid[-4:]}"
+            if want in name.casefold():
+                out.append(app_commands.Choice(name=name[:100], value=uid))
+        return sorted(out, key=lambda c: c.name)[:25]
 
     @tot.command(name="status", description="查看我的藏糖位置、剩余次数和配对情况（仅自己可见）")
     async def cmd_status(self, interaction: discord.Interaction):

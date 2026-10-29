@@ -245,9 +245,9 @@ class SecrecyTests(Base):
         await self.search(A, B, "mouth")
         ev = self.svc.current_event(G)
         public = [ui.board(ev).description, ui.prizes(ev, str(C))]
-        public += [ui.announcement(o).description for _, o in self.svc.pending(G)]
+        public += [ui.announcement(o, e).description for e, o in self.svc.pending(G)]
         await self.svc.close(G, ADMIN)
-        public += [ui.announcement(o).description for _, o in self.svc.pending(G)]
+        public += [ui.announcement(o, e).description for e, o in self.svc.pending(G)]
         for text in public:
             self.assertNotIn("内裤里", text)
             self.assertNotIn("耳后", text)
@@ -261,12 +261,83 @@ class SecrecyTests(Base):
         await self.svc.join(G, eid, B, "butt_crack")
         await self.search(A, B, "armpit")
         await self.search(A, B, "butt_crack")
-        miss, hit = [ui.announcement(o) for _, o in self.svc.pending(G)]
+        miss, hit = [ui.announcement(o, e) for e, o in self.svc.pending(G)]
         self.assertIn(f"<@{B}> 已排除：腋下（1 / 7）", miss.description)
         self.assertIn("剩余搜查：2 / 3", miss.description)
         self.assertIn(f"<@{B}> 成为 <@{A}> 的万圣节奖品", hit.description)
         self.assertIn("「屁股缝」", hit.description)
         self.assertTrue(miss.footer.text.startswith("公告 #o"))
+
+
+class NicknameTests(Base):
+    async def test_nickname_shown_instead_of_mention(self):
+        eid = await self.open()
+        await self.svc.join(G, eid, A, "mouth", "  南瓜灯   小猫 ")
+        await self.svc.join(G, eid, B, "sock", "*幽灵*")
+        await self.svc.join(G, eid, C, "chest")                           # 不填昵称 → 仍用 @
+        self.assertEqual(self.player(A)["nickname"], "南瓜灯 小猫")
+        await self.search(A, B, "mouth")
+        await self.search(C, B, "sock")
+        ev = self.svc.current_event(G)
+        miss, hit = [ui.announcement(o, e).description for e, o in self.svc.pending(G)]
+        self.assertIn("**南瓜灯 小猫** 搜查了 **\\*幽灵\\*** 的「嘴巴里」", miss)
+        self.assertNotIn(f"<@{A}>", miss)
+        self.assertNotIn(f"<@{B}>", miss)
+        self.assertIn(f"**\\*幽灵\\* 成为 <@{C}> 的万圣节奖品！**", hit)
+        self.assertIn("南瓜灯 小猫", ui.board(ev).description + ui.prizes(ev, str(A)) + ui.status(ev, str(A)))
+
+    async def test_nickname_rules(self):
+        eid = await self.open()
+        with self.assertRaisesRegex(TotError, "最多"):
+            await self.svc.join(G, eid, A, "mouth", "长" * 21)
+        await self.svc.join(G, eid, A, "mouth", "Pumpkin")
+        with self.assertRaisesRegex(TotError, "已经有人用了"):
+            await self.svc.join(G, eid, B, "mouth", "pumpkin")
+        p = await self.svc.join(G, eid, B, "mouth", "   ")
+        self.assertIsNone(p["nickname"])
+        self.assertEqual(ui.at(self.svc.current_event(G), "123"), "<@123>")
+        await self.svc.join(G, eid, C, "sock", "@everyone")
+        self.assertNotIn("@everyone", ui.at(self.svc.current_event(G), str(C)))
+
+    async def test_find_player(self):
+        from minigames.trick_or_treat.service import find_player
+        eid = await self.open()
+        await self.svc.join(G, eid, A, "mouth", "南瓜灯小猫")
+        ev = self.svc.current_event(G)
+        for text in (str(A), f"<@{A}>", f"<@!{A}>", "南瓜灯小猫", " 南瓜灯小猫 "):
+            with self.subTest(text):
+                self.assertEqual(find_player(ev, text), str(A))
+        for text in ("南瓜灯", str(B), ""):
+            with self.subTest(text):
+                self.assertIsNone(find_player(ev, text))
+
+
+class JoinModalTests(Base):
+    """报名表提交走 on_interaction（按 custom_id），重启后提交的表单也能接住。"""
+
+    async def submit(self, cog, eid, uid, part, nick, cid=None):
+        replies = []
+
+        async def send_message(text=None, **kw):
+            replies.append(text)
+        data = {"custom_id": cid or f"tot:join:{eid}", "components": [
+            {"type": 18, "component": {"type": 3, "custom_id": "part", "values": [part] if part else []}},
+            {"type": 18, "component": {"type": 4, "custom_id": "nickname", "value": nick}}]}
+        it = NS(type=discord.InteractionType.modal_submit, guild_id=G, data=data, user=NS(id=uid),
+                response=NS(is_done=lambda: False, send_message=send_message))
+        await cog.on_interaction(it)
+        return replies
+
+    async def test_modal_submit(self):
+        eid = await self.open(start=False)
+        cog = TrickOrTreat(NS(user=NS(id=999)), self.svc)
+        r = await self.submit(cog, eid, A, "behind_ear", "南瓜灯小猫")
+        self.assertIn("「耳后」", r[0])
+        self.assertIn("南瓜灯小猫", r[0])
+        self.assertEqual(self.player(A)["nickname"], "南瓜灯小猫")
+        self.assertIn("已经报名", (await self.submit(cog, eid, A, "mouth", ""))[0])
+        self.assertIn("没有这个", (await self.submit(cog, eid, B, "", ""))[0])
+        self.assertEqual(await self.submit(cog, eid, B, "mouth", "", cid="pp:say:x:y"), [])   # 别的 Modal 不管
 
 
 # ---------------------------------------------------------------- outbox 发送
@@ -316,7 +387,7 @@ class OutboxTests(Base):
         await self.search(A, B, "chest")
         (ev, item), = self.svc.pending(G)
         await self.svc.mark_attempt(G, ev["id"], item["id"])             # 模拟：已尝试、已发出但没记录
-        embed = ui.announcement(item)
+        embed = ui.announcement(item, ev)
         self.ch.old = [NS(id=7777, author=NS(id=999), embeds=[embed])]
         await self.cog.flush(G)
         self.assertEqual(self.ch.sent, [])
