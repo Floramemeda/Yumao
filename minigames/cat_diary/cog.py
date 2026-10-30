@@ -1,4 +1,4 @@
-"""喵咪日事本：「记笔记 @造化玉猫 …」写入监听与 /read-diary 查询。所有回复都公开。"""
+"""喵咪日事本：「记笔记 @造化玉猫 …」写入监听、右键消息「记笔记」与 /read-diary 查询。写入与查询结果都公开。"""
 from __future__ import annotations
 
 import json
@@ -11,11 +11,13 @@ from discord.ext import commands
 
 from . import store as st
 from .store import DiaryStore
-from .text import parse_write
+from ..persona_proxy.webhook_sender import is_persona_webhook
+from .text import parse_write, strip_markdown
 
 log = logging.getLogger(__name__)
 
 MSG_SAVED = "<@{uid}> 已经帮你记入在喵咪日事上了！你放心！本喵的日事本不会被别人看！！"
+MSG_NOTED = "<@{uid}> 已经帮你把 {speaker} 的这句话记入喵咪日事本了！你放心！本喵的日事本不会被别人看！！"
 MSG_BAD_MENTION = "😾 本喵的日事本不许乱艾特别人！把那些 @ 去掉再来！"
 MSG_EMPTY = "📝 要记什么呀？在 @造化玉猫 后面写上内容！"
 MSG_TOO_LONG = "📜 太长啦！本喵的日事本一条最多记 {n} 个字。"
@@ -68,7 +70,8 @@ def render_results(entries: list[dict], names: dict[str, str], target_user_id: i
     for e in entries:
         body = safe_text(e["content"]).replace("\n", "\n  ")   # 多行笔记缩进，留在同一个列表项里
         if target_user_id is None:
-            body = f"**{safe_text(names[e['user_id']])}**：{body}"
+            speaker = e.get("persona_name") or names[e["user_id"]]
+            body = f"**{safe_text(speaker)}**：{body}"
         bullets.append(f"* {body}")
 
     embeds, current = [], ""
@@ -98,6 +101,14 @@ class CatDiary(commands.Cog, name="CatDiary"):
         self.bot = bot
         self.cfg = cfg or load_config()
         self.store = store or DiaryStore(self.cfg)
+        self.note_menu = app_commands.ContextMenu(name="记笔记", callback=self.note_context)
+        self.note_menu.guild_only = True
+
+    async def cog_load(self) -> None:
+        self.bot.tree.add_command(self.note_menu)
+
+    async def cog_unload(self) -> None:
+        self.bot.tree.remove_command(self.note_menu.name, type=self.note_menu.type)
 
     def guild_cfg(self, guild_id: int | None) -> dict | None:
         g = self.cfg.get("guilds", {}).get(str(guild_id))
@@ -121,13 +132,14 @@ class CatDiary(commands.Cog, name="CatDiary"):
         if (parsed.bad_mention or others or message.role_mentions or message.channel_mentions
                 or message.mention_everyone):
             return await self._reply(message, MSG_BAD_MENTION)
-        if not parsed.body:
+        body = strip_markdown(parsed.body)              # 只记文字本身
+        if not body:
             return await self._reply(message, MSG_EMPTY)
-        if len(parsed.body) > self.cfg["max_entry_length"]:
+        if len(body) > self.cfg["max_entry_length"]:
             return await self._reply(message, MSG_TOO_LONG.format(n=self.cfg["max_entry_length"]))
 
         result = await self.store.add(message.guild.id, message.author.id, message.channel.id, message.id,
-                                      parsed.body, message.created_at)
+                                      body, message.created_at)
         if result.status == st.OK:
             await self._reply(message, MSG_SAVED.format(uid=message.author.id), ping=message.author.id)
         elif result.status == st.COOLDOWN:
@@ -137,6 +149,45 @@ class CatDiary(commands.Cog, name="CatDiary"):
         elif result.status == st.STORAGE_ERROR:
             await self._reply(message, MSG_STORAGE)
         # DUPLICATE：同一条消息重复投递，静默忽略
+
+    async def note_context(self, interaction: discord.Interaction, message: discord.Message):
+        """右键消息 →「记笔记」：把这条消息记入日事本，说话人是原消息作者；玉猫回复原消息并 @ 点击的人。"""
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        gcfg = self.guild_cfg(interaction.guild_id)
+        if gcfg is None or message.channel.id != int(gcfg.get("write_channel_id") or 0):
+            return await self._private(interaction, "📕 只能在本服的记笔记频道里用「记笔记」哦。")
+        # 皮套消息记皮套名字（不暴露背后的真人）；其他机器人 / Webhook 不记
+        persona = message.author.name if is_persona_webhook(message.webhook_id) else None
+        if persona is None and (message.author.bot or message.webhook_id is not None):
+            return await self._private(interaction, "🙀 本喵只记真人和皮套说的话，机器人的消息不能记。")
+        body = strip_markdown(message.clean_content)   # 提及转成纯文字名字；去掉 Markdown 只留文字本身
+        if not body:
+            return await self._private(interaction, "📝 这条消息没有文字，本喵记不了。")
+        if len(body) > self.cfg["max_entry_length"]:
+            return await self._private(interaction, MSG_TOO_LONG.format(n=self.cfg["max_entry_length"]))
+
+        clicker = interaction.user.id
+        author_id = None if persona else message.author.id
+        recorded_by = clicker if clicker != author_id else None
+        result = await self.store.add(interaction.guild_id, author_id, message.channel.id, message.id,
+                                      body, message.created_at, recorded_by=recorded_by, persona_name=persona)
+        if result.status == st.OK:
+            log.info("喵咪日事本：guild=%s 右键记笔记 message=%s", interaction.guild_id, message.id)
+            speaker = f"**{safe_text(persona)}**" if persona else f"<@{author_id}>"
+            text = MSG_NOTED.format(uid=clicker, speaker=speaker) if recorded_by else MSG_SAVED.format(uid=clicker)
+            await self._reply(message, text, ping=clicker)
+            return await self._private(interaction, "✅ 记好啦！")
+        await self._private(interaction, {
+            st.DUPLICATE: "📔 这条消息已经记在日事本里了。",
+            st.COOLDOWN: MSG_WRITE_COOLDOWN.format(n=result.retry_after),
+            st.FULL: MSG_FULL.format(n=self.cfg["max_entries_per_guild"]),
+        }.get(result.status, MSG_STORAGE))
+
+    async def _private(self, interaction: discord.Interaction, text: str) -> None:
+        try:
+            await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
+        except discord.HTTPException as e:
+            log.warning("喵咪日事本：私密回复失败 guild=%s: %s", interaction.guild_id, e)
 
     async def _reply(self, message: discord.Message, text: str, ping: int | None = None) -> None:
         allowed = (discord.AllowedMentions(everyone=False, roles=False, replied_user=False,
@@ -170,7 +221,7 @@ class CatDiary(commands.Cog, name="CatDiary"):
         if res.status == st.STORAGE_ERROR:
             return await self._followup(interaction, {"content": MSG_READ_STORAGE})
 
-        ids = {e["user_id"] for e in res.entries} | ({str(user.id)} if user else set())
+        ids = {e["user_id"] for e in res.entries if e["user_id"]} | ({str(user.id)} if user else set())
         names = {uid: await self._display_name(interaction.guild, int(uid)) for uid in ids}
         for msg in render_results(res.entries, names, user.id if user else None, text):
             await self._followup(interaction, msg)

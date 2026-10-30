@@ -133,8 +133,12 @@ class DiaryStore:
 
     # ------------------------------------------------------------------ 写入
 
-    async def add(self, guild_id: int, user_id: int, channel_id: int, message_id: int,
-                  content: str, created_at: datetime) -> WriteResult:
+    async def add(self, guild_id: int, user_id: int | None, channel_id: int, message_id: int,
+                  content: str, created_at: datetime, recorded_by: int | None = None,
+                  persona_name: str | None = None) -> WriteResult:
+        """user_id 是笔记的说话人；recorded_by 是右键「记笔记」的人（冷却算在他头上），自己记时为空。
+        皮套消息没有真人归属：user_id 为空，说话人记成 persona_name（皮套名字）。"""
+        actor = str(recorded_by or user_id)
         async with self.lock(guild_id):
             try:
                 doc = self._load(guild_id)
@@ -144,18 +148,22 @@ class DiaryStore:
             mid = str(message_id)
             if any(e["message_id"] == mid for e in doc["entries"]):
                 return WriteResult(DUPLICATE)                      # 重复投递：不入库、不刷新冷却
-            until = doc["cooldowns"]["write"].get(str(user_id))
+            until = doc["cooldowns"]["write"].get(actor)
             if until and _parse(until) > now:
                 return WriteResult(COOLDOWN, remaining_seconds(_parse(until), now))
             if len(doc["entries"]) >= self.cfg["max_entries_per_guild"]:
                 return WriteResult(FULL)
 
             new = self._next_version(doc)
-            entry = {"id": mid, "user_id": str(user_id), "channel_id": str(channel_id), "message_id": mid,
+            entry = {"id": mid, "user_id": str(user_id) if user_id else None, "channel_id": str(channel_id), "message_id": mid,
                      "content": content, "created_at": _iso(created_at)}
+            if recorded_by is not None:
+                entry["recorded_by"] = str(recorded_by)
+            if persona_name:
+                entry["persona_name"] = persona_name
             new["entries"] = doc["entries"] + [entry]
             self._prune_cooldowns(new, now)
-            new["cooldowns"]["write"][str(user_id)] = _iso(now + timedelta(seconds=self.cfg["write_cooldown_seconds"]))
+            new["cooldowns"]["write"][actor] = _iso(now + timedelta(seconds=self.cfg["write_cooldown_seconds"]))
             try:
                 self._persist(guild_id, new)                       # 笔记与冷却同一次原子提交
             except StorageError:

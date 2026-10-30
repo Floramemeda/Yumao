@@ -17,7 +17,8 @@ from minigames.cat_diary.cog import (
     MSG_BAD_MENTION, MSG_NOTHING, CatDiary, load_config, render_results,
 )
 from minigames.cat_diary.store import DiaryStore
-from minigames.cat_diary.text import parse_write, search_key
+from minigames.persona_proxy.webhook_sender import KNOWN_WEBHOOK_IDS
+from minigames.cat_diary.text import parse_write, search_key, strip_markdown
 
 BOT = 777
 G1, G2 = 1001, 1002
@@ -173,6 +174,13 @@ class WriteTests(DiaryTestBase):
         self.assertEqual((e["user_id"], e["message_id"], e["channel_id"], e["content"]), ("42", "5", str(CH1), "今天吃薯餅"))
         self.assertEqual(e["created_at"], "2026-10-22T01:00:00Z")
 
+    async def test_typed_note_markdown_removed(self):
+        await self.write(f"记笔记 <@{BOT}> **今晚** ||吃|| `薯饼`", author=42, mid=6)
+        self.assertEqual(self.entries()[0]["content"], "今晚 吃 薯饼")
+        replies = await self.write(f"记笔记 <@{BOT}> ** **", author=43, mid=7)    # 去掉格式后为空
+        self.assertIn("要记什么", replies[0][0])
+        self.assertEqual(len(self.entries()), 1)
+
     async def test_ignored_sources(self):
         cases = [
             dict(content=f"记笔记 <@{BOT}> x", channel=9999),         # 非指定频道
@@ -269,6 +277,109 @@ class WriteTests(DiaryTestBase):
         self.assertEqual(path.read_text(encoding="utf-8"), "{broken")
 
 
+# ---------------------------------------------------------------- 右键「记笔记」
+
+class NoteMenuTests(DiaryTestBase):
+    async def menu(self, content, author=42, clicker=7, mid=500, channel=CH1, guild=G1, bot=False, webhook=None,
+                   clean=None, name="某人"):
+        msg = make_message(content, author=author, guild=guild, channel=channel, mid=mid, bot=bot, webhook=webhook)
+        msg.author.name = name
+        msg.clean_content = content if clean is None else clean
+        msg.reply = _reply.__get__(msg)
+        it = FakeInteraction(clicker, guild)
+        await self.cog.note_context(it, msg)
+        return msg.replies, [s.content for s in it.sent]
+
+    async def test_records_original_author_and_pings_clicker(self):
+        replies, private = await self.menu("今天的月亮好圆", author=42, clicker=7)
+        text, allowed = replies[0]
+        self.assertEqual(text, "<@7> 已经帮你把 <@42> 的这句话记入喵咪日事本了！你放心！本喵的日事本不会被别人看！！")
+        self.assertEqual([u.id for u in allowed.users], [7])                 # 只提醒点击的人
+        self.assertFalse(allowed.everyone or allowed.roles or allowed.replied_user)
+        self.assertEqual(private, ["✅ 记好啦！"])
+        e, = self.entries()
+        self.assertEqual((e["user_id"], e["recorded_by"], e["content"], e["message_id"]),
+                         ("42", "7", "今天的月亮好圆", "500"))
+        it = await self.read(user=42)                                        # 查询按原作者归属
+        self.assertIn("今天的月亮好圆", it.sent[0].embeds[0].description)
+
+    async def test_own_message_and_duplicate(self):
+        replies, _ = await self.menu("自己的话", author=7, clicker=7)
+        self.assertNotIn("recorded_by", self.entries()[0])
+        self.assertIn("<@7> 已经帮你记入", replies[0][0])
+        self.clock.advance(self.cfg["write_cooldown_seconds"])
+        replies, private = await self.menu("自己的话", author=7, clicker=8)
+        self.assertEqual(replies, [])
+        self.assertIn("已经记在", private[0])
+
+    async def test_cooldown_is_on_clicker(self):
+        await self.menu("第一句", author=42, clicker=7, mid=501)
+        _, private = await self.menu("第二句", author=43, clicker=7, mid=502)
+        self.assertIn("秒后再来", private[0])
+        replies, _ = await self.menu("第三句", author=42, clicker=8, mid=503)  # 换人点不受影响
+        self.assertTrue(replies)
+
+    async def test_rejections(self):
+        cases = [
+            (dict(channel=999), "记笔记频道"),
+            (dict(guild=G2, channel=CH1), "记笔记频道"),
+            (dict(bot=True), "机器人"),
+            (dict(webhook=123), "机器人"),
+            (dict(webhook=123, bot=True), "机器人"),
+            (dict(clean="   "), "没有文字"),
+        ]
+        for kw, msg in cases:
+            with self.subTest(msg=msg, kw=kw):
+                replies, private = await self.menu("一句话", **kw)
+                self.assertEqual(replies, [])
+                self.assertIn(msg, private[0])
+        replies, private = await self.menu("长" * (self.cfg["max_entry_length"] + 1))
+        self.assertIn("太长", private[0])
+        self.assertEqual(self.entries(), [])
+
+    async def test_mentions_become_plain_text(self):
+        await self.menu("<@99> 你好", clean="@小明 你好")
+        self.assertEqual(self.entries()[0]["content"], "@小明 你好")
+
+    async def test_persona_message_records_persona_name(self):
+        KNOWN_WEBHOOK_IDS.add(8888)
+        replies, private = await self.menu("**今晚**的月亮", author=31337, clicker=7, bot=True, webhook=8888,
+                                           name="沈*墨*")
+        text, allowed = replies[0]
+        self.assertEqual(text, "<@7> 已经帮你把 **沈\\*墨\\*** 的这句话记入喵咪日事本了！你放心！本喵的日事本不会被别人看！！")
+        self.assertEqual([u.id for u in allowed.users], [7])
+        e, = self.entries()
+        self.assertEqual((e["user_id"], e["persona_name"], e["recorded_by"], e["content"]),
+                         (None, "沈*墨*", "7", "今晚的月亮"))
+        it = await self.read(uid=50)
+        self.assertEqual(it.sent[0].embeds[0].description, "* **沈\\*墨\\***：今晚的月亮")
+        it = await self.read(user=31337, uid=51)                          # 不会归到 webhook 的假用户上
+        self.assertIn("什么也没找到", it.sent[0].content)
+
+    async def test_markdown_removed(self):
+        await self.menu("x", clean="# 今晚\n> **月亮** 好 *圆*，||秘密||\n- `薯饼` [链接](https://a.com)")
+        self.assertEqual(self.entries()[0]["content"], "今晚\n月亮 好 圆，秘密\n薯饼 链接")
+        _, private = await self.menu("x", mid=501, clicker=8, clean="> ** **")
+        self.assertIn("没有文字", private[0])
+
+
+class StripMarkdownTests(unittest.TestCase):
+    def test_cases(self):
+        cases = {
+            "**粗体** *斜体* ***粗斜*** __下划线__ ~~删~~ ||剧透||": "粗体 斜体 粗斜 下划线 删 剧透",
+            "# 标题\n-# 小字\n>>> 多行引用\n* 列表": "标题\n小字\n多行引用\n列表",
+            "```py\nprint(1)\n``` `x`": "print(1) x",
+            "[文字](https://a.com) <https://b.com> <:cat:123> <a:dance:456>": "文字 https://b.com :cat: :dance:",
+            "snake_case_name 5*3=15 a * b": "snake_case_name 5*3=15 a * b",
+            "\\*不是斜体\\* 1\\. 编号": "*不是斜体* 1. 编号",
+            "**__双层__** ***~~三层~~***": "双层 三层",
+            "普通的一句话～": "普通的一句话～",
+        }
+        for src, want in cases.items():
+            with self.subTest(src):
+                self.assertEqual(strip_markdown(src), want)
+
+
 # ---------------------------------------------------------------- 查询
 
 class ReadTests(DiaryTestBase):
@@ -344,7 +455,7 @@ class ReadTests(DiaryTestBase):
     async def test_rendering_safe_and_split(self):
         await self.note("**粗体** [链接](https://evil) > 引用", author=1)
         it = await self.read(uid=50)
-        self.assertEqual(self.contents(it), [r"\*\*粗体\*\* \[链接](https://evil) > 引用"])  # 行中 > 不是引用
+        self.assertEqual(self.contents(it), ["粗体 链接 > 引用"])        # 写入时去掉 Markdown；行中 > 不是引用
         self.assertEqual(render_results([{"user_id": "1", "content": "> 行首引用", "created_at": "2026-10-22T01:00:00Z"}],
                                         {"1": "某人"}, None)[0]["embeds"][0].description, r"* **某人**：\> 行首引用")
         entries = [{"user_id": "1", "content": "喵" * 1000, "created_at": "2026-10-22T01:00:00Z"} for _ in range(5)]
