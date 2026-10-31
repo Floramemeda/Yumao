@@ -1,0 +1,7 @@
+Yumao kneading cat paw extracted keyframes
+Source: Seedance video 960x960 ~4.1 sec.
+Files: 960x470 transparent RGBA PNG, consistent original coordinates.
+Frame indices: [0, 8, 17, 26, 35, 43, 52, 61, 70, 78, 87, 96]
+Use PNG as an overlay at x=0,y=0 on a 960x960 virtual canvas. Do not redraw paws.
+Black-background removal is an approximate luminance chroma key; inspect fine outlines before final production.
+Animation notes: original legs move relatively synchronously; use individual paw separation / timing offsets for true alternating kneading.

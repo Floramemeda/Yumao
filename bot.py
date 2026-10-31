@@ -24,6 +24,7 @@ EXTENSIONS = [
     'minigames.rp_dice',
     'minigames.keyword_alert',
     'minigames.trick_or_treat',
+    'minigames.petpet',
 ]
 
 

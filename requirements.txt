@@ -2,3 +2,4 @@ discord.py==2.7.1
 python-dotenv==1.2.3
 tzdata==2026.3
 opencc-python-reimplemented==0.1.7
+pillow==12.3.0
