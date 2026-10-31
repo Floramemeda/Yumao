@@ -1,0 +1,9 @@
+Yumao POKE / BOOP Sprite Frames
+Source duration: 4.017 s; 24.149 fps; 97 original frames.
+16 RGBA PNG frames sampled in chronological order from the source video.
+Canvas size: 480x480, positions aligned to the source. DO NOT crop each image independently.
+Black background removed approximately via luminosity alpha matting.
+Source frames: 0, 6, 12, 19, 25, 32, 38, 44, 51, 57, 64, 70, 76, 83, 89, 96
+Recommended: composite on top of Discord avatar and animate avatar squash when paw tip moves left/down.
+Replay frames in source order; adjust durations to fit the intended boop loop.
+Black matte extraction is approximate: review fringe on light/dark backgrounds.

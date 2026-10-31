@@ -7,6 +7,7 @@ from unittest import mock
 import discord
 from PIL import Image, ImageChops
 
+from minigames.petpet import anim, poke
 from minigames.petpet.cog import COOLDOWN_SECONDS, PetPet, caption
 from minigames.petpet.render import (ASSET_DIR, PHASE_OFFSET, SIZE, SOURCE_FRAMES, SPLIT_X, SUBFRAMES, durations_ms,
                                      make_gif, paw_layers, spring_track, subframe_cs)
@@ -125,16 +126,16 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
         self.now = [100.0]
         self.cog = PetPet(NS(user=NS(id=BOT)), clock=lambda: self.now[0])
 
-    async def pet(self, actor, target, avatar=None, fail=False):
+    async def pet(self, actor, target, avatar=None, fail=False, kind="knead"):
         it = FakeInteraction(actor)
-        await self.cog.pet(it, NS(id=target, display_avatar=FakeAsset(avatar or image_bytes(), fail)))
+        await self.cog.pet(it, NS(id=target, display_avatar=FakeAsset(avatar or image_bytes(), fail)), kind)
         return it
 
     async def test_sends_gif_without_pinging(self):
         it = await self.pet(A, B)
         text, file, allowed = it.sent[0]
         self.assertEqual(text, f"🐾 玉猫应 <@{A}> 的要求，给 <@{B}> 踩了踩奶～")
-        self.assertEqual(file.filename, "petpet.gif")
+        self.assertEqual(file.filename, "knead.gif")
         self.assertFalse(allowed.users or allowed.roles or allowed.everyone)
 
     async def test_cooldown(self):
@@ -153,9 +154,56 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
         it = await self.pet(A, B, avatar=b"garbage")
         self.assertIn("没拿到头像", it.sent[0][0])
 
+    async def test_poke(self):
+        it = await self.pet(A, B, kind="poke")
+        text, file, allowed = it.sent[0]
+        self.assertEqual(text, f"🐾 玉猫应 <@{A}> 的要求，戳了戳 <@{B}>～")
+        self.assertEqual(file.filename, "poke.gif")
+        self.assertFalse(allowed.users or allowed.roles or allowed.everyone)
+        it = await self.pet(A, B, kind="knead")                              # 两种动作共用冷却
+        self.assertIn("秒后再踩", it.ephemeral[0])
+
     def test_captions(self):
         self.assertIn("呼噜呼噜", caption(A, A, BOT))
         self.assertIn("玉猫给自己踩了踩奶", caption(A, BOT, BOT))
+        self.assertIn("戳一下软一下", caption(A, A, BOT, "poke"))
+        self.assertIn("玉猫戳了戳自己", caption(A, BOT, BOT, "poke"))
+
+
+class PokeRenderTests(unittest.TestCase):
+    def test_output(self):
+        g = Image.open(io.BytesIO(poke.make_gif(image_bytes())))
+        self.assertEqual((g.format, g.size, g.n_frames),
+                         ("GIF", (poke.SIZE, poke.SIZE), len(poke.SOURCE_FRAMES) * poke.SUBFRAMES))
+        self.assertEqual(g.info.get("loop"), 0)
+        self.assertEqual(g.convert("RGBA").getpixel((1, poke.SIZE - 1))[3], 0)   # 背景透明
+        got = []
+        for i in range(g.n_frames):
+            g.seek(i)
+            got.append(g.info["duration"])
+        self.assertTrue(all(d >= 20 for d in got))                             # 浏览器会把 <20ms 的帧拖成 100ms
+        self.assertTrue(1500 <= sum(got) <= 2500)                              # 2× 速，约 2.1 秒一圈
+        self.assertLess(len(poke.make_gif(image_bytes((64, 64), mode="RGBA"))), 300_000)
+
+    def test_keyframes_and_contact(self):
+        paws, contact = poke.paw_frames()
+        self.assertEqual(len(paws), 16)
+        self.assertEqual(len({p.size for p in paws}), 1)                       # 整张贴、不单独裁切
+        self.assertEqual(max(contact), 1.0)
+        self.assertEqual(contact[0], 0.0)                                      # 首尾都没碰到：循环衔接自然
+        self.assertEqual(contact[-1], 0.0)
+        self.assertGreater(sum(1 for c in contact if c > 0.5), 3)              # 戳了两下
+        self.assertLessEqual(poke.PAW_OFFSET[1], 0)                            # 手臂断口不会露出来
+        self.assertGreaterEqual(poke.PAW_OFFSET[0] + poke.SOURCE, poke.CANVAS)
+
+    def test_rebound_and_seamless(self):
+        cs = poke.subframe_cs()
+        args = (poke.SPRING_HZ * poke.SPEED, poke.SPRING_DAMPING)
+        track = anim.spring_track(list(poke.paw_frames()[1]), cs, *args, poke.SPRING_WARMUP)
+        self.assertLess(min(track), -0.1)                                     # 收爪后往右上方过冲
+        longer = anim.spring_track(list(poke.paw_frames()[1]), cs, *args, poke.SPRING_WARMUP + 4)
+        for a, b in zip(track, longer):
+            self.assertAlmostEqual(a, b, places=4)
 
 
 if __name__ == "__main__":

@@ -14,12 +14,13 @@
 """
 from __future__ import annotations
 
-import io
 import math
 from functools import lru_cache
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image
+
+from . import anim
 
 ASSET_DIR = Path(__file__).parent / "assets" / "kneading"
 SOURCE_FRAMES = [0, 8, 17, 26, 35, 43, 52, 61, 70, 78, 87, 96]   # 关键帧在原视频里的帧号
@@ -50,43 +51,16 @@ BOUNCE = 0.035             # 整体压扁 / 拉高的幅度
 
 def durations_ms() -> list[int]:
     """每张关键帧的时长（毫秒）：原视频帧号间隔换算，再按 SPEED 倍速。"""
-    nxt = SOURCE_FRAMES[1:] + [SOURCE_FRAMES[-1] + LAST_GAP]
-    return [round((b - a) * 1000 / SOURCE_FPS / SPEED) for a, b in zip(SOURCE_FRAMES, nxt)]
+    return anim.keyframe_ms(SOURCE_FRAMES, SOURCE_FPS, LAST_GAP, SPEED)
 
 
 def subframe_cs() -> list[list[int]]:
-    """每张关键帧拆成 SUBFRAMES 个子帧的时长（GIF 的 1/100 秒单位），子帧时长相加等于原时长。"""
-    out = []
-    for ms in durations_ms():
-        total = round(ms / 10)
-        base, extra = divmod(total, SUBFRAMES)
-        out.append([base + (1 if s < extra else 0) for s in range(SUBFRAMES)])
-    return out
+    return anim.split_cs(durations_ms(), SUBFRAMES)
 
 
 def spring_track(targets: list[float], cs: list[list[int]]) -> list[float]:
-    """头像对按压的弹性跟随：目标在每张关键帧内保持不变，头像用欠阻尼弹簧追上去，抬爪时会略微反弹过头。
-
-    连续模拟 SPRING_WARMUP 圈后取最后一圈（周期稳态），所以末帧和首帧接得上。返回每个子帧的位移。
-    """
-    omega = 2 * math.pi * SPRING_HZ * SPEED            # 倍速时弹簧同步加快，回弹手感不变
-    x = v = 0.0
-    samples: list[float] = []
-    for _ in range(SPRING_WARMUP):
-        samples = []
-        for target, parts in zip(targets, cs):
-            for part in parts:
-                for _ in range(part * 10):            # 1ms 积分
-                    a = omega * omega * (target - x) - 2 * SPRING_DAMPING * omega * v
-                    v += a * 0.001
-                    x += v * 0.001
-                samples.append(x)                     # 取子帧结束时的位移，头像跟手不拖拍
-    return samples
-
-
-def _norm(values: list[float]) -> tuple[float, ...]:
-    lo, hi = min(values), max(values)
-    return tuple((v - lo) / (hi - lo) if hi > lo else 0.0 for v in values)
+    """头像对按压的弹性跟随（弹簧随 SPEED 同步加快，回弹手感不变）。"""
+    return anim.spring_track(targets, cs, SPRING_HZ * SPEED, SPRING_DAMPING, SPRING_WARMUP)
 
 
 @lru_cache(maxsize=1)
@@ -109,24 +83,10 @@ def paw_layers() -> dict:
             bottoms[side].append(bbox[3])
             centers[side].append((bbox[0] + bbox[2]) / 2)
             out[side].append(layer.resize((WORK, round(im.height * k)), Image.LANCZOS))
-    out["press_l"], out["press_r"] = _norm(bottoms["left"]), _norm(bottoms["right"])
+    out["press_l"], out["press_r"] = anim.norm(bottoms["left"]), anim.norm(bottoms["right"])
     out["cx_l"] = sum(centers["left"]) / len(centers["left"])
     out["cx_r"] = sum(centers["right"]) / len(centers["right"])
     return out
-
-
-def _avatar_disc(raw: bytes, d: int) -> Image.Image:
-    """头像裁成圆形（d×d，RGBA）。"""
-    img = Image.open(io.BytesIO(raw))
-    img.seek(0)                                   # 动态头像取第一帧
-    img = img.convert("RGBA")
-    side = min(img.size)
-    left, top = (img.width - side) // 2, (img.height - side) // 2
-    img = img.crop((left, top, left + side, top + side)).resize((d, d), Image.LANCZOS)
-    mask = Image.new("L", (d * 4, d * 4), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, d * 4 - 1, d * 4 - 1), fill=255)
-    img.putalpha(ImageChops.multiply(img.getchannel("A"), mask.resize((d, d), Image.LANCZOS)))
-    return img
 
 
 def _dent(disc: Image.Image, dents: list[tuple[float, float]], pad: int) -> Image.Image:
@@ -159,7 +119,7 @@ def frames(avatar: bytes) -> list[Image.Image]:
     k = WORK / VIRTUAL
     d = round(AVATAR_D * k)
     pad = round(d * DENT * 1.5)
-    disc = _avatar_disc(avatar, d)
+    disc = anim.avatar_disc(avatar, d)
     layers = paw_layers()
     n = len(SOURCE_FRAMES)
     left_x = (layers["cx_l"] - (VIRTUAL - AVATAR_D) / 2) * k     # 两只爪子在头像坐标里的 x
@@ -185,18 +145,10 @@ def frames(avatar: bytes) -> list[Image.Image]:
         canvas.alpha_composite(head, ((WORK - head.width) // 2, round(center_y - head.height / 2)))
         canvas.alpha_composite(layers["left"][i], (0, 0))
         canvas.alpha_composite(layers["right"][right_idx[i]], (0, -stagger))
-        frame = canvas.resize((SIZE, SIZE), Image.LANCZOS)
-        # GIF 只有全透明 / 不透明：半透明边缘先二值化，避免出现一圈杂色描边
-        frame.putalpha(frame.getchannel("A").point(lambda v: 255 if v >= 128 else 0))
-        out.append(frame)
+        out.append(anim.finish_frame(canvas, SIZE))
     return out
 
 
 def make_gif(avatar: bytes) -> bytes:
     """返回 GIF 字节。头像无法识别时抛 PIL.UnidentifiedImageError。"""
-    imgs = frames(avatar)
-    buf = io.BytesIO()
-    durations = [c * 10 for parts in subframe_cs() for c in parts]
-    imgs[0].save(buf, format="GIF", save_all=True, append_images=imgs[1:], duration=durations, loop=0,
-                 disposal=2, optimize=True)
-    return buf.getvalue()
+    return anim.save_gif(frames(avatar), subframe_cs())

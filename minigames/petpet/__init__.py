@@ -1,4 +1,4 @@
-"""踩奶 — /踩奶 与右键「踩奶」：生成玉猫猫爪在头像上踩奶的 GIF。"""
+"""猫爪 GIF — /踩奶、/戳戳 与右键「踩奶」「戳戳」：玉猫猫爪和头像互动的 GIF。"""
 from discord.ext import commands
 
 from .cog import PetPet
