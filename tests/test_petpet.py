@@ -7,7 +7,7 @@ from unittest import mock
 import discord
 from PIL import Image, ImageChops
 
-from minigames.petpet import anim, poke, squish
+from minigames.petpet import anim, poke, prpr, squish
 from minigames.petpet.cog import COOLDOWN_SECONDS, PetPet, caption
 from minigames.petpet.render import (ASSET_DIR, PHASE_OFFSET, SIZE, SOURCE_FRAMES, SPLIT_X, SUBFRAMES, durations_ms,
                                      make_gif, paw_layers, spring_track, subframe_cs)
@@ -177,8 +177,14 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text, f"🐾 玉猫应 <@{A}> 的要求，一爪把 <@{B}> 拍扁了，啪叽！")
         self.assertEqual(file.filename, "squish.gif")
 
+    async def test_prpr(self):
+        it = await self.pet(A, B, kind="prpr")
+        text, file, _ = it.sent[0]
+        self.assertEqual(text, f"😛 玉猫应 <@{A}> 的要求，把 <@{B}> 舔了个遍，prprprpr！")
+        self.assertEqual(file.filename, "prpr.gif")
+
     def test_menus(self):
-        self.assertEqual([m.name for m in self.cog.menus], ["踩奶", "戳戳", "拍扁"])
+        self.assertEqual([m.name for m in self.cog.menus], ["踩奶", "戳戳", "拍扁", "舔舔"])
 
 
 class PokeRenderTests(unittest.TestCase):
@@ -265,6 +271,41 @@ class SquishRenderTests(unittest.TestCase):
         backs = [k in range(5, 14) for k in squish.TIMELINE]
         contact = [k in squish.CONTACT for k in squish.TIMELINE]
         self.assertEqual(backs, contact)
+
+
+class PrprRenderTests(unittest.TestCase):
+    def test_output(self):
+        g = Image.open(io.BytesIO(prpr.make_gif(image_bytes())))
+        self.assertEqual((g.format, g.size, g.info.get("loop")), ("GIF", (160, 160), 0))
+        self.assertEqual(g.convert("RGBA").getpixel((1, 159))[3], 0)            # 背景透明
+        got = []
+        for i in range(g.n_frames):
+            g.seek(i)
+            got.append(g.info["duration"])
+        self.assertTrue(1200 <= sum(got) <= 1500)
+        self.assertTrue(all(d >= 40 for d in got))                             # 不超过 25fps
+        self.assertLess(len(prpr.make_gif(image_bytes((64, 64), mode="RGBA"))), 300_000)
+
+    def test_keyframes_and_contact(self):
+        cats, contact = prpr.cat_frames()
+        self.assertEqual(len(cats), len(prpr.TIMELINE))
+        self.assertEqual(len({c.size for c in cats}), 1)                        # 整张贴、不单独裁切
+        self.assertNotIn(0, [k for k, _ in prpr.TIMELINE])                     # 开头推镜那帧不用
+        licks = [c for c, _, _ in contact]
+        self.assertEqual(max(licks), 1.0)
+        self.assertGreaterEqual(sum(1 for c in licks if c > 0.5), 10)          # 疯狂舔
+        self.assertGreaterEqual(sum(1 for c in licks if c == 0), 4)            # 中间有缩回去，有节奏
+        self.assertTrue(all(dx <= 0 for c, dx, _ in contact if c > 0.5))       # 舌头从右边来，头像往左被顶开
+
+    def test_wobble_and_seamless(self):
+        cs = prpr.subframe_cs()
+        targets = [c * dx for c, dx, _ in prpr.cat_frames()[1]]
+        args = (prpr.SPRING_HZ, prpr.SPRING_DAMPING)
+        track = anim.spring_track(targets, cs, *args, prpr.SPRING_WARMUP)
+        self.assertLess(min(track), -0.4)                                      # 舔到时明显被顶开
+        longer = anim.spring_track(targets, cs, *args, prpr.SPRING_WARMUP + 4)
+        for a, b in zip(track, longer):
+            self.assertAlmostEqual(a, b, places=3)
 
 
 if __name__ == "__main__":
