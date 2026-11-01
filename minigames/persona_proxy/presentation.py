@@ -15,8 +15,9 @@ def short_id(pid: str) -> str:
     return pid.split("_", 1)[-1][:6]
 
 
-def profile_label(p: dict, disabled: bool = False) -> str:
-    label = f"{p['name']} · {short_id(p['id'])}" + ("（停用）" if disabled else "")
+def profile_label(p: dict, disabled: bool = False, owner: str | None = None) -> str:
+    """owner：管理员在选别人的皮套时显示主人名字。"""
+    label = f"{p['name']} · {short_id(p['id'])}" + ("（停用）" if disabled else "") + (f"（{owner} 的）" if owner else "")
     return label[:100]
 
 
@@ -87,9 +88,12 @@ def draft_embed(d: dict, profile_name: str) -> discord.Embed:
 
 def audit_text(rec: dict) -> str:
     lines = [f"真实发送者：<@{rec['owner_id']}>（{rec['owner_id']}）",
-             f"皮套：{discord.utils.escape_markdown(rec.get('profile_name', ''))} · `{rec['profile_id']}`",
-             f"类型：{KIND_LABELS.get(rec.get('kind'), rec.get('kind'))} · 草稿 `{rec.get('draft_id')}`",
-             f"时间：<t:{_ts(rec['at'])}:F>"]
+             f"皮套：{discord.utils.escape_markdown(rec.get('profile_name', ''))} · `{rec['profile_id']}`"]
+    holder = rec.get("profile_owner_id")
+    if holder and holder != rec["owner_id"]:
+        lines.append(f"皮套主人：<@{holder}>（{holder}）· 管理员代用")
+    lines += [f"类型：{KIND_LABELS.get(rec.get('kind'), rec.get('kind'))} · 草稿 `{rec.get('draft_id')}`",
+              f"时间：<t:{_ts(rec['at'])}:F>"]
     if rec.get("reply_to"):
         lines.append(f"回复的原消息：{rec['reply_to'].get('jump_url')}")
     return "\n".join(lines)

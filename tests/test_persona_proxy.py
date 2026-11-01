@@ -24,6 +24,8 @@ from minigames.persona_proxy.webhook_sender import (
 G, G2 = 100, 200
 ROLE = 7
 ADMIN = 8
+MOD = 11            # 皮套管理员身份组
+MOD_USER = 77       # 名单里的皮套管理员（没有任何身份组）
 DISPLAY = 300
 LOGT = 400
 CH = 500
@@ -44,6 +46,7 @@ def make_cfg():
     cfg["guilds"] = {str(gid): {"enabled": True, "allowed_role_ids": [ROLE, ADMIN], "unlimited_role_ids": [ADMIN],
                                 "profile_display_channel_id": DISPLAY, "creation_log_thread_id": LOGT}
                      for gid in (G, G2)}
+    cfg["guilds"][str(G)].update(admin_role_ids=[MOD], admin_user_ids=[MOD_USER])   # 只在 G 是管理员
     return cfg
 
 
@@ -134,6 +137,34 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([p["id"] for p in self.svc.usable(self.svc.store.load(G), 9, (ROLE,))], ids[:2])
         with self.assertRaisesRegex(PersonaError, "超出"):
             self.svc.require_speaker(G, 9, (ROLE,), ids[3])
+
+    async def test_admin_can_use_anyones_profile(self):
+        await self.svc.grant(G, 1, 2)
+        a, _, _ = await self.create(uid=1, name="Bob")
+        b, _, _ = await self.create(uid=1, name="alice")
+        await self.svc.grant(G, 1, 1)                                         # b 超出配额、对主人停用
+        c, _, _ = await self.create(uid=MOD_USER, name="自己的")
+        for uid, roles in ((MOD_USER, ()), (5, (MOD,))):
+            with self.subTest(uid=uid):
+                for p in (a, b):
+                    self.assertEqual(self.svc.require_speaker(G, uid, roles, p["id"])["owner_id"], "1")
+        doc = self.svc.store.load(G)
+        self.assertEqual([p["name"] for p in self.svc.speakable(doc, MOD_USER, ())], ["自己的", "alice", "Bob"])
+        self.assertEqual([p["id"] for p in self.svc.speakable(doc, 1, (ROLE,))], [a["id"]])   # 普通人不变
+        with self.assertRaises(PersonaError):
+            self.svc.require_speaker(G, 2, (ROLE,), a["id"])                   # 非管理员仍然不能冒用
+        with self.assertRaises(PersonaError):
+            self.svc.require_speaker(G, MOD_USER, (), "p_missing")
+        with self.assertRaises(PersonaError):
+            self.svc.get_own(G, MOD_USER, a["id"])                             # 不能改删别人的皮套
+
+    async def test_admin_only_in_configured_guild(self):
+        p, _, _ = await self.create(uid=1, gid=G2)
+        self.assertFalse(self.svc.is_admin(G2, MOD_USER, (MOD,)))
+        with self.assertRaises(PersonaError):
+            self.svc.require_speaker(G2, MOD_USER, (MOD,), p["id"])
+        with self.assertRaises(PersonaError):
+            self.svc.require_speaker(G, MOD_USER, (), p["id"])                 # 别的服务器的皮套
 
     async def test_concurrent_create_respects_quota(self):
         results = await asyncio.gather(*(self.create(name=f"并发{i}") for i in range(5)), return_exceptions=True)
@@ -468,6 +499,34 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sender.sent, [])
         self.assertIn("不可访问", sub.last)
         self.assertEqual(self.drafts()[0]["status"], FAILED)
+
+    async def test_admin_says_with_others_profile(self):
+        p = await self.profile(uid=1)
+        it = await self.say(p["id"], "管理员代发", uid=MOD_USER, roles=())
+        self.assertEqual(self.sender.sent, [(CH, "释无相", AVATAR, "管理员代发")])
+        self.assertIn("已用「释无相」发出", it.last)
+        mid = int(self.drafts()[0]["message_ids"][0])
+        rec = self.svc.store.find_audit(G, mid)
+        self.assertEqual((rec["owner_id"], rec["profile_owner_id"]), (str(MOD_USER), "1"))
+        q = FakeInteraction(administrator=True)
+        await self.cog.audit_context(q, NS(id=mid))
+        self.assertIn(f"真实发送者：<@{MOD_USER}>", q.last)
+        self.assertIn("皮套主人：<@1>", q.last)
+
+    async def test_admin_reply_picker_and_autocomplete_list_everyone(self):
+        mine = await self.profile(uid=MOD_USER, name="版主自己")
+        other = await self.profile(uid=2, name="别人的")
+        it = FakeInteraction(uid=5, roles=(MOD,))
+        await self.cog.reply_context(it, NS(id=42))
+        labels = [o.label for o in it.messages[0].view.children[0].options]
+        self.assertEqual(len(labels), 2)
+        self.assertTrue(any("别人的" in x and "（2 的）" in x for x in labels))
+        choices = await self.cog.ac_usable(FakeInteraction(uid=MOD_USER, roles=()), "")
+        self.assertEqual([c.value for c in choices], [mine["id"], other["id"]])
+        self.assertNotIn("的）", choices[0].name)                                  # 自己的皮套不标主人
+        self.assertIn("（2 的）", choices[1].name)
+        plain = await self.cog.ac_usable(FakeInteraction(uid=2), "")
+        self.assertEqual([c.value for c in plain], [other["id"]])                  # 普通人只看到自己的
 
     async def test_picker_paginates(self):
         profiles = [{"id": f"p_{i:010d}", "name": f"角色{i}"} for i in range(30)]

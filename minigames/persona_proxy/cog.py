@@ -105,13 +105,16 @@ class ConfirmDelete(discord.ui.View):
 class ProfilePicker(discord.ui.View):
     """「以皮套回复」：仅本人可见的皮套选择面板，超过 25 个时分页。"""
 
-    def __init__(self, cog: PersonaProxy, owner_id: int, profiles: list[dict], target: discord.Message, page: int = 0):
+    def __init__(self, cog: PersonaProxy, owner_id: int, profiles: list[dict], target: discord.Message, page: int = 0,
+                 owners: dict[str, str] | None = None):
         super().__init__(timeout=600)
         self.cog, self.owner_id, self.profiles, self.target, self.page = cog, owner_id, profiles, target, page
+        self.owners = owners or {}      # 管理员面板：别人的皮套 id → 主人名字
         pages = max(1, (len(profiles) + PAGE - 1) // PAGE)
         chunk = profiles[page * PAGE:(page + 1) * PAGE]
         select = discord.ui.Select(placeholder=f"选择皮套（{page + 1}/{pages}）",
-                                   options=[discord.SelectOption(label=ui.profile_label(p), value=p["id"]) for p in chunk])
+                                   options=[discord.SelectOption(label=ui.profile_label(p, owner=self.owners.get(p["id"])),
+                                                                 value=p["id"]) for p in chunk])
         select.callback = self.on_select
         self.add_item(select)
         if pages > 1:
@@ -124,7 +127,7 @@ class ProfilePicker(discord.ui.View):
 
     async def turn(self, interaction: discord.Interaction, delta: int):
         await interaction.response.edit_message(
-            view=ProfilePicker(self.cog, self.owner_id, self.profiles, self.target, self.page + delta))
+            view=ProfilePicker(self.cog, self.owner_id, self.profiles, self.target, self.page + delta, self.owners))
 
     async def on_select(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
@@ -185,6 +188,17 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
         except discord.HTTPException as e:
             log.warning("皮套：回复失败: %s", e)
 
+    @staticmethod
+    def owner_names(interaction: discord.Interaction, profiles: list[dict]) -> dict[str, str]:
+        """别人的皮套 id → 主人在本服的名字（不在缓存里就显示 id）。"""
+        guild, uid = getattr(interaction, "guild", None), str(interaction.user.id)
+        out = {}
+        for p in profiles:
+            if p["owner_id"] != uid:
+                member = guild.get_member(int(p["owner_id"])) if guild else None
+                out[p["id"]] = member.display_name if member else p["owner_id"]
+        return out
+
     def _profile_choices(self, interaction: discord.Interaction, current: str, usable_only: bool):
         try:
             doc = self.service.store.load(interaction.guild_id)
@@ -192,10 +206,15 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
             return []
         uid, roles = interaction.user.id, role_ids(interaction)
         usable = {p["id"] for p in self.service.usable(doc, uid, roles)}
-        rows = self.service.usable(doc, uid, roles) if usable_only else self.service.owned(doc, uid)
+        rows = self.service.speakable(doc, uid, roles) if usable_only else self.service.owned(doc, uid)
+        owners = self.owner_names(interaction, rows) if usable_only else {}
         cur = current.casefold()
-        choices = [app_commands.Choice(name=ui.profile_label(p, p["id"] not in usable), value=p["id"])
-                   for p in rows if cur in ui.profile_label(p).casefold()]
+        choices = []
+        for p in rows:
+            owner = owners.get(p["id"])
+            label = ui.profile_label(p, not usable_only and p["id"] not in usable, owner)
+            if cur in label.casefold():
+                choices.append(app_commands.Choice(name=label, value=p["id"]))
         return choices[:25]
 
     async def ac_usable(self, interaction: discord.Interaction, current: str):
@@ -525,6 +544,7 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
 
         self.service.audit(gid, {"draft_id": d["id"], "kind": d["kind"], "owner_id": str(uid),
                                  "profile_id": profile["id"], "profile_name": profile["name"],
+                                 "profile_owner_id": profile["owner_id"],
                                  "channel_id": d["channel_id"], "message_ids": d["message_ids"],
                                  "reply_to": d["reply_to"]})
         await self.err(interaction, f"✅ 已用「{discord.utils.escape_markdown(profile['name'])}」发出。")
@@ -542,10 +562,11 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
         try:
             if self.service.guild_cfg(gid) is None:
                 raise PersonaError("本服没有开启皮套功能。")
-            if not self.service.has_role(gid, role_ids(interaction)):
+            roles = role_ids(interaction)
+            if not (self.service.has_role(gid, roles) or self.service.is_admin(gid, uid, roles)):
                 raise PersonaError("你没有使用皮套的身份组。")
             check_channel(interaction)
-            usable = self.service.usable(self.service.store.load(gid), uid, role_ids(interaction))
+            usable = self.service.speakable(self.service.store.load(gid), uid, roles)
             if not usable:
                 raise PersonaError("你没有可用的皮套。")
         except PersonaError as e:
@@ -553,7 +574,8 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
         except StorageError:
             return await self.err(interaction, MSG_STORAGE)
         await interaction.response.send_message("选择用哪个皮套回复这条消息：", ephemeral=True,
-                                                view=ProfilePicker(self, uid, usable, message))
+                                                view=ProfilePicker(self, uid, usable, message,
+                                                                   owners=self.owner_names(interaction, usable)))
 
     async def audit_context(self, interaction: discord.Interaction, message: discord.Message):
         perms = interaction.permissions

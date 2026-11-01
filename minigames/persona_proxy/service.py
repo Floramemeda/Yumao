@@ -65,6 +65,12 @@ class PersonaService:
         g = self.guild_cfg(guild_id) or {}
         return bool({int(r) for r in g.get("unlimited_role_ids", [])} & {int(r) for r in role_ids})
 
+    def is_admin(self, guild_id: int, user_id: int, role_ids) -> bool:
+        """皮套管理员（admin_role_ids 身份组或 admin_user_ids 名单）：可以用本服任何人的皮套发言，但不能改删别人的皮套。"""
+        g = self.guild_cfg(guild_id) or {}
+        return int(user_id) in {int(u) for u in g.get("admin_user_ids", [])} or \
+            bool({int(r) for r in g.get("admin_role_ids", [])} & {int(r) for r in role_ids})
+
     def limit_of(self, doc: dict, user_id: int, role_ids=()) -> int:
         if self.is_unlimited(int(doc["guild_id"]), role_ids):
             return int(self.cfg["max_profile_limit"])
@@ -79,10 +85,23 @@ class PersonaService:
         """按 (created_at, id) 升序取前 limit 个；与最近使用时间无关，配额回升后自动恢复。"""
         return self.owned(doc, user_id)[: self.limit_of(doc, user_id, role_ids)]
 
+    def speakable(self, doc: dict, user_id: int, role_ids=()) -> list[dict]:
+        """能拿来发言的皮套：普通人是自己可用的前 N 个；管理员是自己的全部皮套，再加上本服其他人的全部皮套（按名字排）。"""
+        if not self.is_admin(int(doc["guild_id"]), user_id, role_ids):
+            return self.usable(doc, user_id, role_ids)
+        others = [p for p in doc["profiles"] if p["owner_id"] != str(user_id)]
+        return self.owned(doc, user_id) + sorted(others, key=lambda p: (p["name"].casefold(), p["id"]))
+
     def require_speaker(self, guild_id: int, user_id: int, role_ids, profile_id: str) -> dict:
-        """发言门槛：功能开启 + 身份组 + 配额 > 0 + Profile 属于本人且在可用前 N 个。"""
+        """发言门槛：功能开启 + 身份组 + 配额 > 0 + Profile 属于本人且在可用前 N 个。
+        管理员只要求 Profile 属于本服（任何人的、不论配额）。"""
         if self.guild_cfg(guild_id) is None:
             raise PersonaError("本服没有开启皮套功能。")
+        if self.is_admin(guild_id, user_id, role_ids):
+            p = next((x for x in self.store.load(guild_id)["profiles"] if x["id"] == profile_id), None)
+            if p is None:
+                raise PersonaError("找不到这个皮套（可能已被删除）。")
+            return dict(p)
         if not self.has_role(guild_id, role_ids):
             raise PersonaError("你没有使用皮套的身份组。")
         doc = self.store.load(guild_id)

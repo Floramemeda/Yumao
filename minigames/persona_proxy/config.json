@@ -4,6 +4,8 @@
       "enabled": true,
       "allowed_role_ids": [1555626372133818479, 1541312990186573884],
       "unlimited_role_ids": [1541312990186573884],
+      "admin_role_ids": [1541312990186573884],
+      "admin_user_ids": [1340691892039585896, 1352875203117453334],
       "profile_display_channel_id": 1561559074426982400,
       "creation_log_thread_id": 1562731344126152714
     }
