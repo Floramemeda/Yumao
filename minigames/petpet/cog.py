@@ -1,4 +1,4 @@
-"""猫爪 GIF：/踩奶、/戳戳 与右键用户 →「踩奶」「戳戳」，生成玉猫猫爪和对方头像互动的 GIF 公开发出。"""
+"""猫爪 GIF：/踩奶、/戳戳、/拍扁 与右键用户 →「踩奶」「戳戳」「拍扁」，生成玉猫猫爪和对方头像互动的 GIF 公开发出。"""
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +13,7 @@ from discord import app_commands
 from discord.ext import commands
 from PIL import UnidentifiedImageError
 
-from . import poke, render
+from . import poke, render, squish
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,10 @@ ACTIONS = {
                    "🐾 玉猫戳了戳自己……？{actor} 你在想什么喵！",
                    "🐾 玉猫戳了戳 {actor}，戳一下软一下～",
                    "🐾 玉猫应 {actor} 的要求，戳了戳 {target}～"),
+    "squish": Action("拍扁", squish.make_gif, "squish.gif", "拍",
+                     "🐾 玉猫一爪把自己拍扁了……？{actor} 你在想什么喵！",
+                     "🐾 玉猫一爪把 {actor} 拍扁了，啪叽！",
+                     "🐾 玉猫应 {actor} 的要求，一爪把 {target} 拍扁了，啪叽！"),
 }
 
 
@@ -57,7 +61,8 @@ class PetPet(commands.Cog, name="PetPet"):
         self.clock = clock
         self.last_used: dict[int, float] = {}
         self.menus = []
-        for kind, callback in (("knead", self.knead_context), ("poke", self.poke_context)):
+        for kind, callback in (("knead", self.knead_context), ("poke", self.poke_context),
+                               ("squish", self.squish_context)):
             menu = app_commands.ContextMenu(name=ACTIONS[kind].name, callback=callback)
             menu.guild_only = True
             self.menus.append(menu)
@@ -82,11 +87,20 @@ class PetPet(commands.Cog, name="PetPet"):
     async def poke_command(self, interaction: discord.Interaction, user: discord.User | None = None):
         await self.pet(interaction, user or interaction.user, "poke")
 
+    @app_commands.command(name="拍扁", description="让玉猫一爪把某人的头像拍扁（生成 GIF）")
+    @app_commands.describe(user="拍谁（不填就拍你自己）")
+    @app_commands.guild_only()
+    async def squish_command(self, interaction: discord.Interaction, user: discord.User | None = None):
+        await self.pet(interaction, user or interaction.user, "squish")
+
     async def knead_context(self, interaction: discord.Interaction, user: discord.User):
         await self.pet(interaction, user, "knead")
 
     async def poke_context(self, interaction: discord.Interaction, user: discord.User):
         await self.pet(interaction, user, "poke")
+
+    async def squish_context(self, interaction: discord.Interaction, user: discord.User):
+        await self.pet(interaction, user, "squish")
 
     async def pet(self, interaction: discord.Interaction, target: discord.abc.User, kind: str = "knead") -> None:
         action = ACTIONS[kind]

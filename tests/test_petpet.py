@@ -7,7 +7,7 @@ from unittest import mock
 import discord
 from PIL import Image, ImageChops
 
-from minigames.petpet import anim, poke
+from minigames.petpet import anim, poke, squish
 from minigames.petpet.cog import COOLDOWN_SECONDS, PetPet, caption
 from minigames.petpet.render import (ASSET_DIR, PHASE_OFFSET, SIZE, SOURCE_FRAMES, SPLIT_X, SUBFRAMES, durations_ms,
                                      make_gif, paw_layers, spring_track, subframe_cs)
@@ -168,6 +168,17 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("玉猫给自己踩了踩奶", caption(A, BOT, BOT))
         self.assertIn("戳一下软一下", caption(A, A, BOT, "poke"))
         self.assertIn("玉猫戳了戳自己", caption(A, BOT, BOT, "poke"))
+        self.assertIn("拍扁了，啪叽", caption(A, A, BOT, "squish"))
+        self.assertIn("把自己拍扁了", caption(A, BOT, BOT, "squish"))
+
+    async def test_squish(self):
+        it = await self.pet(A, B, kind="squish")
+        text, file, _ = it.sent[0]
+        self.assertEqual(text, f"🐾 玉猫应 <@{A}> 的要求，一爪把 <@{B}> 拍扁了，啪叽！")
+        self.assertEqual(file.filename, "squish.gif")
+
+    def test_menus(self):
+        self.assertEqual([m.name for m in self.cog.menus], ["踩奶", "戳戳", "拍扁"])
 
 
 class PokeRenderTests(unittest.TestCase):
@@ -204,6 +215,56 @@ class PokeRenderTests(unittest.TestCase):
         longer = anim.spring_track(list(poke.paw_frames()[1]), cs, *args, poke.SPRING_WARMUP + 4)
         for a, b in zip(track, longer):
             self.assertAlmostEqual(a, b, places=4)
+
+
+class SquishRenderTests(unittest.TestCase):
+    def test_output(self):
+        g = Image.open(io.BytesIO(squish.make_gif(image_bytes())))
+        self.assertEqual((g.format, g.size), ("GIF", (160, 160)))
+        self.assertEqual(len(squish.frames(image_bytes())), len(squish.TIMELINE))
+        self.assertEqual(g.info.get("loop"), 0)
+        self.assertEqual(g.convert("RGBA").getpixel((1, 159))[3], 0)            # 背景透明
+        got = []
+        for i in range(g.n_frames):
+            g.seek(i)
+            got.append(g.info["duration"])
+        self.assertEqual(sum(got), 1650)                                       # 相同的相邻帧会被合并，总时长不变
+        self.assertLess(len(squish.make_gif(image_bytes((64, 64), mode="RGBA"))), 300_000)
+
+    def test_keyframes(self):
+        paws = squish.paw_frames()
+        self.assertEqual(len(paws), 20)
+        self.assertEqual(len({p.size for p in paws}), 1)                       # 整张贴、不单独裁切
+        self.assertEqual(squish.TIMELINE[0], squish.TIMELINE[-1])               # 首尾同一姿势
+
+    def test_flatten_exactly_on_contact(self):
+        h = squish.heights()
+        for key, height in zip(squish.TIMELINE, h):
+            self.assertEqual(key in squish.CONTACT, height == squish.FLAT)     # 爪子压着 ⇔ 压扁
+        first = next(f for f, k in enumerate(squish.TIMELINE) if k in squish.CONTACT)
+        self.assertTrue(all(x == 1.0 for x in h[:first]))                      # 拍到之前不变形
+        flat_ms = sum(ms for x, ms in zip(h, squish.FRAME_MS) if x == squish.FLAT)
+        self.assertEqual(flat_ms, 120 + 400)                                   # 拍下 + 压扁停留
+        self.assertAlmostEqual(max(h), squish.STRETCH, places=2)               # 回弹拉到 110%
+        self.assertAlmostEqual(h[-1], 1.0, delta=0.002)                         # 结尾复位：循环无缝
+        _, release_end = squish.phase_ms("release")
+        peak_t = sum(squish.FRAME_MS[:h.index(max(h))])
+        self.assertTrue(release_end <= peak_t < squish.phase_ms("rebound")[1])  # 110% 落在回弹段
+
+    def test_phases(self):
+        lengths = {name: sum(ms for _, ms in part) for name, part in squish.PHASES}
+        self.assertEqual(lengths, {"anticipation": 250, "strike": 120, "hold": 400,
+                                   "release": 250, "rebound": 350, "settle": 280})
+        self.assertTrue(all(ms >= 40 for ms in squish.FRAME_MS))                # 浏览器会把 <20ms 的帧拖成 100ms
+        strike = [k for k, _ in dict(squish.PHASES)["strike"]]
+        self.assertEqual(strike[0], 5)                                         # 拍下段第一帧就是接触帧
+        self.assertAlmostEqual(squish.width_for(squish.FLAT), 1.2)
+
+    def test_paw_flips_only_at_contact(self):
+        # 肉垫朝前（0~4、14~19）和爪背（5~13）只在拍到 / 抬起时切换
+        backs = [k in range(5, 14) for k in squish.TIMELINE]
+        contact = [k in squish.CONTACT for k in squish.TIMELINE]
+        self.assertEqual(backs, contact)
 
 
 if __name__ == "__main__":

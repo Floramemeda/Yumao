@@ -1,0 +1,38 @@
+{
+  "source_video_fps": 24.149377593360995,
+  "source_frame_count": 97,
+  "canvas_px": [
+    582,
+    806
+  ],
+  "common_crop_in_original": [
+    190,
+    62,
+    772,
+    868
+  ],
+  "source_frame_indices": [
+    0,
+    8,
+    16,
+    22,
+    25,
+    27,
+    29,
+    31,
+    33,
+    36,
+    42,
+    50,
+    58,
+    64,
+    68,
+    70,
+    72,
+    75,
+    82,
+    90
+  ],
+  "frames": "flatten_##_source_###.png",
+  "notes": "All RGBA frames use the same canvas and positional alignment. Video transitions from pink pads (front) to furry paw back and back again; do not assume video frame intervals are desirable for snappy slap. Never individually recenter frames."
+}

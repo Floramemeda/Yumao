@@ -1,0 +1,1 @@
+Yumao /squish paw assets. 20 RGBA frames; identical alignment. The moving paw (not avatar) is extracted from the Seedance black-background video. Build avatar as a separate layer. Use custom timing for fast impact; do not copy the original 4-second timing. Crop coordinates from full video in manifest.json.
