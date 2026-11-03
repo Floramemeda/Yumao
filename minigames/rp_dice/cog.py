@@ -214,25 +214,36 @@ class RpDice(commands.Cog, name="RpDice"):
             return
         self.seen.append(message.id)
         result = dice.roll(expr)
+        text = dice.format_result(result)
+        if expr.hidden:                              # 暗骰：结果私信给掷骰人，频道里只说掷过了
+            try:
+                await message.author.send(f"🙈 暗骰（{message.jump_url}）\n{text}")
+                text = "🎲 进行了一次暗骰，结果已私信。"
+            except discord.HTTPException:
+                text = "🎲 暗骰结果私信发不出去（可能关闭了服务器成员私信），可以改用 `/roll` 并打开「暗骰」。"
         try:
-            await message.reply(dice.format_result(result), mention_author=False,
-                                allowed_mentions=discord.AllowedMentions.none())
+            await message.reply(text, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException as e:
             log.warning("RP：骰点回复失败 channel=%s: %s", message.channel.id, e)
 
-    @app_commands.command(name="roll", description="掷骰，例：1d100>98、2d6、1d20>=15")
-    @app_commands.describe(expression="骰式，如 1d100>98")
+    @app_commands.command(name="roll", description="掷骰，例：1d100>98、2d6、1d100-20、1d20+5>=15 优势")
+    @app_commands.describe(expression="骰式，如 1d100>98；可带 +5 / -20，以及优势、劣势、暗骰",
+                           hidden="暗骰：结果只有自己看得到，频道里只显示掷过了")
+    @app_commands.rename(hidden="暗骰")
     @app_commands.guild_only()
-    async def roll(self, interaction: discord.Interaction, expression: str):
+    async def roll(self, interaction: discord.Interaction, expression: str, hidden: bool = False):
         try:
             expr = dice.parse(expression, self.service.cfg["dice_limits"])
         except dice.DiceError as e:
             return await say(interaction, str(e))
         if expr is None:
-            return await say(interaction, "骰式格式不对，例：`1d100>98`、`2d6`、`1d20>=15`。")
+            return await say(interaction, "骰式格式不对，例：`1d100>98`、`2d6`、`1d100-20`、`1d20+5>=15 优势`、`暗骰 1d100`。")
         if self._rate_limited(interaction.user.id, interaction.channel_id):
             return await say(interaction, "掷得太快啦，稍等一下。")
         result = dice.roll(expr)
+        if hidden or expr.hidden:
+            await say(interaction, f"🙈 暗骰 {dice.format_result(result)}")
+            return await say(interaction, f"🎲 {interaction.user.mention} 进行了一次暗骰。", ephemeral=False)
         await interaction.response.send_message(f"{interaction.user.mention} {dice.format_result(result)}",
                                                 allowed_mentions=discord.AllowedMentions.none())
 

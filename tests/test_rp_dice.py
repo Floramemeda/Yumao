@@ -45,9 +45,43 @@ class DiceTests(unittest.TestCase):
 
     def test_not_expressions(self):
         for text in ("今天掷个1d100>98", "1d100>98 好耶", "`1d100>98`", "> 1d100>98", "d20", "1d", "1d100>",
-                     "1d100>-5", "1d100+5", "2d6 2d6", ""):
+                     "1d100>-5", "1d100+", "1d100++5", "2d6 2d6", "", "优势", "1d20 优势 好耶", "暗骰1d100暗"):
             with self.subTest(text):
                 self.assertIsNone(dice.parse(text, LIMITS))
+
+    def test_modifier_and_keywords_parse(self):
+        cases = {
+            "1d100-20": (-20, None, False, None, None), "1d20 + 5 >= 15": (5, None, False, ">=", 15),
+            "1d20优势": (0, "adv", False, None, None), "劣势 1d20+3>10": (3, "dis", False, ">", 10),
+            "1d20 ADV": (0, "adv", False, None, None), "dis1d20": (0, "dis", False, None, None),
+            "暗骰 1d100": (0, None, True, None, None), "暗骰1d100-10<50 优势": (-10, "adv", True, "<", 50),
+        }
+        for text, (mod, mode, hidden, op, t) in cases.items():
+            with self.subTest(text):
+                e = dice.parse(text, LIMITS)
+                self.assertEqual((e.modifier, e.mode, e.hidden, e.op, e.threshold), (mod, mode, hidden, op, t))
+        for text in ("1d20 优势 劣势", "优势 1d20 优势", "1d100+10001"):
+            with self.subTest(text), self.assertRaises(dice.DiceError):
+                dice.parse(text, LIMITS)
+
+    def test_modifier_roll_and_format(self):
+        r = dice.roll(dice.parse("1d100-20", LIMITS), fixed([57]))
+        self.assertEqual((r.total, dice.format_result(r)), (37, "🎲 1d100-20 → 57-20 = 37"))
+        r = dice.roll(dice.parse("2d6+3>9", LIMITS), fixed([2, 5]))
+        self.assertEqual(dice.format_result(r), "🎲 2d6+3 → [2, 5]+3，合计 10 | ✅ 成功（10 > 9）")
+        r = dice.roll(dice.parse("1d10-5>=0", LIMITS), fixed([1]))
+        self.assertEqual((r.total, r.success), (-4, False))
+
+    def test_advantage(self):
+        r = dice.roll(dice.parse("1d20+5>=15 优势", LIMITS), fixed([7, 18]))
+        self.assertEqual(dice.format_result(r), "🎲 1d20+5（优势） → 7 / 18，取 18 → 18+5 = 23 | ✅ 成功（23 >= 15）")
+        r = dice.roll(dice.parse("1d20 劣势", LIMITS), fixed([7, 18]))
+        self.assertEqual(dice.format_result(r), "🎲 1d20（劣势） → 7 / 18，取 7")
+        # 判定是「小于」时，优势取较小、劣势取较大
+        self.assertEqual(dice.roll(dice.parse("1d100<30 优势", LIMITS), fixed([80, 12])).total, 12)
+        self.assertEqual(dice.roll(dice.parse("1d100<30 劣势", LIMITS), fixed([80, 12])).total, 80)
+        r = dice.roll(dice.parse("2d6 优势", LIMITS), fixed([1, 2, 5, 6]))
+        self.assertEqual(dice.format_result(r), "🎲 2d6（优势） → [1, 2]=3 / [5, 6]=11，取 11")
 
     def test_limits(self):
         for text in ("21d6", "0d6", "1d1", "1d1001", "1d100>20001"):
@@ -249,7 +283,14 @@ class FakeChannel:
 def message(content, channel=CH, parent=None, author=P1, bot=False, webhook=None, mid=1,
             mtype=discord.MessageType.default):
     msg = NS(content=content, guild=NS(id=G), channel=NS(id=channel, parent_id=parent), id=mid, type=mtype,
-             author=NS(id=author, bot=bot), webhook_id=webhook, replies=[])
+             author=NS(id=author, bot=bot), webhook_id=webhook, replies=[], dms=[], jump_url="https://x/1",
+             dm_closed=False)
+
+    async def send(text):
+        if msg.dm_closed:
+            raise discord.HTTPException(NS(status=403, reason="x"), "x")
+        msg.dms.append(text)
+    msg.author.send = send
 
     async def reply(text, mention_author=True, allowed_mentions=None):
         msg.replies.append((text, mention_author, allowed_mentions))
@@ -343,6 +384,33 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
         m4 = message("1d6", mid=45)
         await self.cog.on_message(m4)
         self.assertEqual(len(m4.replies), 1)
+
+    async def test_auto_hidden_roll(self):
+        m = message("暗骰 1d100-20>50", mid=50)
+        with mock.patch.object(dice.secrets, "randbelow", lambda n: 98):
+            await self.cog.on_message(m)
+        self.assertIn("99-20 = 79", m.dms[0])
+        self.assertNotIn("79", m.replies[0][0])
+        self.assertIn("已私信", m.replies[0][0])
+        self.now[0] += 10
+        m = message("1d100 暗骰", mid=51)
+        m.dm_closed = True
+        await self.cog.on_message(m)
+        self.assertIn("/roll", m.replies[0][0])
+        self.assertNotIn("→", m.replies[0][0])
+
+    async def test_slash_hidden_roll(self):
+        for kw in ({"expression": "1d20+5", "hidden": True}, {"expression": "暗骰 1d20+5"}):
+            self.now[0] += 10
+            it = FakeInteraction(uid=P1, channel=CH2)
+            with mock.patch.object(dice.secrets, "randbelow", lambda n: 9):
+                await self.cog.roll.callback(self.cog, it, **kw)
+            secret, public = it.sent
+            self.assertTrue(secret.ephemeral)
+            self.assertIn("10+5 = 15", secret.content)
+            self.assertFalse(public.ephemeral)
+            self.assertIn("暗骰", public.content)
+            self.assertNotIn("15", public.content)
 
     async def test_slash_roll_anywhere(self):
         it = FakeInteraction(uid=P1, channel=CH2)

@@ -4,7 +4,8 @@
     "max_count": 20,
     "min_sides": 2,
     "max_sides": 1000,
-    "max_threshold": 20000
+    "max_threshold": 20000,
+    "max_modifier": 10000
   },
   "roll_cooldown_seconds": 2,
 
