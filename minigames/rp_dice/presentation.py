@@ -48,10 +48,14 @@ def announcement(session: dict, ann: dict) -> str:
         else:
             lines.append(f"{label}：{p[key]}")
     cond = conditions_text(p)
-    if ann.get("condition_change"):
-        sign, name = ann["condition_change"]
-        mark = "新增" if sign == "+" else "解除"
-        cond += f"（{mark}：{discord.utils.escape_markdown(name)}）"
+    moves = ann.get("condition_changes") or ([ann["condition_change"]] if ann.get("condition_change") else [])
+    parts = []
+    for sign, mark in (("+", "新增"), ("-", "解除")):
+        names = [discord.utils.escape_markdown(n) for sg, n in moves if sg == sign]
+        if names:
+            parts.append(f"{mark}：{'、'.join(names)}")
+    if parts:
+        cond += f"（{'；'.join(parts)}）"
     lines.append(f"异常状态：{cond}")
     lines.append(f"操作者：{_m(ann['actor'])}")
     return "\n".join(lines)

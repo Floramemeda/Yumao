@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import collections
 import logging
+import re
 import time
 
 import discord
@@ -45,31 +46,40 @@ async def say(interaction: discord.Interaction, text: str, *, ephemeral: bool = 
 
 # ---------------------------------------------------------------- Modal
 
-class StatModal(discord.ui.Modal, title="修改数值"):
-    def __init__(self, cog: RpDice, session_id: str, user_id: str):
+def split_names(text: str | None) -> list[str]:
+    """「束缚 I、发热，迷乱」→ ["束缚 I", "发热", "迷乱"]：用顿号、逗号、分号或换行分隔（空格不算，名字里可以有空格）。"""
+    return [n.strip() for n in re.split(r"[、，,;；\n]+", text or "") if n.strip()]
+
+
+class SettleModal(discord.ui.Modal, title="结算"):
+    """一次填完理智、发情值、新增异常和解除异常，提交后一起保存、只发一条公告。"""
+
+    def __init__(self, cog: RpDice, session_id: str, user_id: str, player: dict):
         super().__init__(timeout=PANEL_TIMEOUT)
         self.cog, self.session_id, self.user_id = cog, session_id, user_id
         hint = "如 -15 / +20 表示增减，80 表示设为 80；留空不改"
-        self.sanity = discord.ui.TextInput(label="理智", required=False, max_length=8, placeholder=hint)
-        self.heat = discord.ui.TextInput(label="发情值", required=False, max_length=8, placeholder=hint)
+        self.sanity = discord.ui.TextInput(label=f"理智（当前 {player['sanity']}）", required=False, max_length=8,
+                                           placeholder=hint)
+        self.heat = discord.ui.TextInput(label=f"发情值（当前 {player['heat']}）", required=False, max_length=8,
+                                         placeholder=hint)
+        self.add_cond = discord.ui.TextInput(label="新增异常", required=False, max_length=300,
+                                             placeholder="例：束缚 I、发热（多个用顿号或逗号隔开）；留空不加")
         self.add_item(self.sanity)
         self.add_item(self.heat)
+        self.add_item(self.add_cond)
+        self.remove_cond = None
+        if player["conditions"]:
+            names = [c["name"][:100] for c in player["conditions"][:25]]
+            self.remove_cond = discord.ui.Select(placeholder="不选就不解除", required=False, min_values=0,
+                                                 max_values=len(names),
+                                                 options=[discord.SelectOption(label=n, value=n) for n in names])
+            self.add_item(discord.ui.Label(text="解除异常", component=self.remove_cond))
 
     async def on_submit(self, interaction: discord.Interaction):
-        await self.cog.op_stats(interaction, self.session_id, self.user_id,
-                                {"sanity": self.sanity.value, "heat": self.heat.value})
-
-
-class ConditionModal(discord.ui.Modal, title="添加异常状态"):
-    def __init__(self, cog: RpDice, session_id: str, user_id: str):
-        super().__init__(timeout=PANEL_TIMEOUT)
-        self.cog, self.session_id, self.user_id = cog, session_id, user_id
-        self.name = discord.ui.TextInput(label="异常名称", max_length=cog.service.cfg["condition_max_length"],
-                                         placeholder="例：束缚 I")
-        self.add_item(self.name)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await self.cog.op_condition(interaction, self.session_id, self.user_id, add=self.name.value)
+        await self.cog.op_update(interaction, self.session_id, self.user_id,
+                                 {"sanity": self.sanity.value, "heat": self.heat.value},
+                                 add=split_names(self.add_cond.value),
+                                 remove=list(self.remove_cond.values) if self.remove_cond else [])
 
 
 class ProgressModal(discord.ui.Modal, title="设置探索进度"):
@@ -135,16 +145,14 @@ class PlayerPanel(discord.ui.View):
         super().__init__(timeout=PANEL_TIMEOUT)
         self.cog, self.sid, self.uid = cog, session_id, user_id
 
-        stats = discord.ui.Button(label="修改理智 / 发情值", emoji="📊", style=discord.ButtonStyle.primary, row=0)
-        stats.callback = lambda i: i.response.send_modal(StatModal(self.cog, self.sid, self.uid))
-        self.add_item(stats)
-        cond = discord.ui.Button(label="添加异常", emoji="➕", style=discord.ButtonStyle.secondary, row=0)
-        cond.callback = lambda i: i.response.send_modal(ConditionModal(self.cog, self.sid, self.uid))
-        self.add_item(cond)
+        settle = discord.ui.Button(label="结算（理智 / 发情值 / 异常）", emoji="📝", style=discord.ButtonStyle.primary,
+                                   row=0)
+        settle.callback = lambda i: i.response.send_modal(SettleModal(self.cog, self.sid, self.uid, player))
+        self.add_item(settle)
         if player["conditions"]:
             rm = discord.ui.Select(placeholder="➖ 移除异常…", row=1, options=[
                 discord.SelectOption(label=c["name"][:100], value=c["name"][:100]) for c in player["conditions"][:25]])
-            rm.callback = lambda i: self.cog.op_condition(i, self.sid, self.uid, remove=i.data["values"][0])
+            rm.callback = lambda i: self.cog.op_update(i, self.sid, self.uid, {}, remove=i.data["values"][:1])
             self.add_item(rm)
         kick = discord.ui.Button(label="移出本场", style=discord.ButtonStyle.danger, row=2)
         kick.callback = lambda i: self.cog.confirm_remove(i, self.sid, self.uid)
@@ -422,23 +430,15 @@ class RpDice(commands.Cog, name="RpDice"):
             text = f"已加入 {len(added)} 名玩家。" if added else "所选玩家都已在场。"
             await self.show_panel(interaction, session_id, text + (f"\n{note}" if note else ""))
 
-    async def op_stats(self, interaction, session_id: str, user_id: str, inputs: dict):
-        ok, res = await self._run(interaction, self.service.change_stats(
-            interaction.guild_id, session_id, actor_of(interaction), int(user_id), inputs))
+    async def op_update(self, interaction, session_id: str, user_id: str, stats: dict, *,
+                        add: list[str] = (), remove: list[str] = ()):
+        ok, res = await self._run(interaction, self.service.update_player(
+            interaction.guild_id, session_id, actor_of(interaction), int(user_id), stats=stats, add=add,
+            remove=remove))
         if ok:
             note = await self.flush(interaction.guild_id, session_id)
-            text = "已更新并公告。" if res else "数值没有变化，不发公告。"
+            text = "已更新并公告。" if res else "没有任何变化，不发公告。"
             await self.show_player(interaction, session_id, user_id, text + (f"\n{note}" if note else ""))
-
-    async def op_condition(self, interaction, session_id: str, user_id: str, *, add: str | None = None,
-                           remove: str | None = None):
-        actor = actor_of(interaction)
-        coro = (self.service.add_condition(interaction.guild_id, session_id, actor, int(user_id), add) if add is not None
-                else self.service.remove_condition(interaction.guild_id, session_id, actor, int(user_id), remove))
-        ok, _ = await self._run(interaction, coro)
-        if ok:
-            note = await self.flush(interaction.guild_id, session_id)
-            await self.show_player(interaction, session_id, user_id, "已更新并公告。" + (f"\n{note}" if note else ""))
 
     async def op_progress(self, interaction, session_id: str, *, delta: int | None = None, set_to: int | None = None):
         ok, res = await self._run(interaction, self.service.change_progress(

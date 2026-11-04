@@ -12,7 +12,7 @@ import discord
 
 from minigames.rp_dice import dice
 from minigames.rp_dice import presentation as ui
-from minigames.rp_dice.cog import RpDice
+from minigames.rp_dice.cog import RpDice, split_names
 from minigames.rp_dice.service import ACTIVE, ENDED, Actor, RpError, RpService, load_config, parse_stat_input
 from minigames.rp_dice.store import RpStore
 
@@ -484,7 +484,7 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
     async def test_stat_change_announces_once(self):
         sid = await self.start()
         it = FakeInteraction(uid=DM, itype=discord.InteractionType.modal_submit)
-        await self.cog.op_stats(it, sid, str(P1), {"sanity": "-15", "heat": "+20"})
+        await self.cog.op_update(it, sid, str(P1), {"sanity": "-15", "heat": "+20"})
         self.assertEqual(len(self.channel.sent), 1)                                           # 两项合并一条公告
         text, allowed = self.channel.sent[0]
         self.assertIn(f"📋 探索者状态更新 — <@{P1}>", text)
@@ -496,15 +496,55 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
         ev = self.svc.store.load(G)["sessions"][sid]["events"][-1]
         self.assertEqual(ev["announcement_message_id"], "901")
         it = FakeInteraction(uid=P1, itype=discord.InteractionType.modal_submit)               # 玩家伪造提交
-        await self.cog.op_stats(it, sid, str(P1), {"sanity": "+50"})
+        await self.cog.op_update(it, sid, str(P1), {"sanity": "+50"})
         self.assertIn("只有本场 DM", it.sent[0].content)
         self.assertEqual(len(self.channel.sent), 1)
+
+    async def test_settle_all_at_once_one_announcement(self):
+        sid = await self.start()
+        await self.svc.add_condition(G, sid, Actor(DM), P1, "束缚 I")
+        await self.cog.flush(G, sid)
+        self.channel.sent.clear()
+        it = FakeInteraction(uid=DM, itype=discord.InteractionType.modal_submit)
+        await self.cog.op_update(it, sid, str(P1), {"sanity": "-15", "heat": "+20"},
+                                 add=split_names("发热、迷乱"), remove=["束缚 I"])
+        self.assertEqual(len(self.channel.sent), 1)                                           # 四项合并一条公告
+        text = self.channel.sent[0][0]
+        self.assertIn("理智：100 → 85（-15）", text)
+        self.assertIn("发情值：0 → 20（+20）", text)
+        self.assertIn("异常状态：发热、迷乱（新增：发热、迷乱；解除：束缚 I）", text)
+        p = self.svc.store.load(G)["sessions"][sid]["participants"][str(P1)]
+        self.assertEqual([c["name"] for c in p["conditions"]], ["发热", "迷乱"])
+
+    async def test_settle_is_all_or_nothing(self):
+        sid = await self.start()
+        await self.svc.add_condition(G, sid, Actor(DM), P1, "发热")
+        await self.cog.flush(G, sid)
+        self.channel.sent.clear()
+        it = FakeInteraction(uid=DM, itype=discord.InteractionType.modal_submit)
+        await self.cog.op_update(it, sid, str(P1), {"sanity": "-15"}, add=["发热"])           # 已有：整次不生效
+        self.assertIn("已经有「发热」", it.sent[0].content)
+        p = self.svc.store.load(G)["sessions"][sid]["participants"][str(P1)]
+        self.assertEqual((p["sanity"], len(self.channel.sent)), (100, 0))
+        with self.assertRaises(RpError):
+            await self.svc.update_player(G, sid, Actor(DM), P1, add=["X"], remove=["X"])
+        self.assertIsNone(await self.svc.update_player(G, sid, Actor(DM), P1, stats={"sanity": ""}))
+
+    def test_split_names(self):
+        self.assertEqual(split_names("束缚 I、发热，迷乱,  ;\n眩晕；"), ["束缚 I", "发热", "迷乱", "眩晕"])
+        self.assertEqual(split_names(""), [])
+
+    def test_old_single_condition_announcement_still_renders(self):
+        s = {"participants": {"1": {"sanity": 1, "heat": 2, "conditions": [{"name": "A"}]}}}
+        text = ui.announcement(s, {"kind": "player", "user_id": "1", "actor": "9", "changes": {},
+                                   "condition_change": ["+", "A"]})
+        self.assertIn("异常状态：A（新增：A）", text)
 
     async def test_announcement_failure_is_retried_not_reapplied(self):
         sid = await self.start()
         self.channel.fail = True
         it = FakeInteraction(uid=DM, itype=discord.InteractionType.modal_submit)
-        await self.cog.op_stats(it, sid, str(P1), {"sanity": "-10"})
+        await self.cog.op_update(it, sid, str(P1), {"sanity": "-10"})
         self.assertIn("公告发送失败", it.edits[-1]["embed"].description)
         self.assertEqual(self.svc.store.load(G)["sessions"][sid]["participants"][str(P1)]["sanity"], 90)
         self.channel.fail = False

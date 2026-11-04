@@ -204,33 +204,13 @@ class RpService:
     async def change_stats(self, guild_id: int, session_id: str, actor: Actor, user_id: int,
                            inputs: dict[str, str | None]) -> dict | None:
         """inputs: {"sanity": "-15", "heat": "+20"}。增减按范围夹取；绝对值越界直接拒绝。无变化返回 None。"""
-        lo, hi = self.cfg["stat_min"], self.cfg["stat_max"]
-        parsed = {k: parse_stat_input(v) for k, v in inputs.items() if k in STATS}
-        for key, cmd in parsed.items():
-            if cmd and cmd[0] == "set" and not lo <= cmd[1] <= hi:
-                raise RpError(f"{STATS[key]}只能设为 {lo}–{hi}。")
-        async with self.store.transaction(guild_id) as doc:
-            s = self._locate(doc, session_id, actor)
-            p = self._player(s, user_id)
-            changes = {}
-            for key, cmd in parsed.items():
-                if cmd is None:
-                    continue
-                before = p[key]
-                after = max(lo, min(hi, before + cmd[1])) if cmd[0] == "delta" else cmd[1]
-                if after != before:
-                    p[key] = after
-                    changes[key] = [before, after]
-                    self._event(s, actor, "STAT_DELTA" if cmd[0] == "delta" else "STAT_SET", str(user_id),
-                                before, after, {"stat": key, "input": cmd[1]})
-            if not changes:
-                return None
-            s["pending_announcements"].append({"event_id": s["events"][-1]["id"], "actor": str(actor.user_id),
-                                               "kind": "player", "user_id": str(user_id), "changes": changes,
-                                               "condition_change": None})
-        return {"changes": changes}
+        return await self.update_player(guild_id, session_id, actor, user_id, stats=inputs)
 
-    # ------------------------------------------------------------------ 异常状态
+    async def add_condition(self, guild_id: int, session_id: str, actor: Actor, user_id: int, name: str) -> None:
+        await self.update_player(guild_id, session_id, actor, user_id, add=[name])
+
+    async def remove_condition(self, guild_id: int, session_id: str, actor: Actor, user_id: int, name: str) -> None:
+        await self.update_player(guild_id, session_id, actor, user_id, remove=[name])
 
     def _condition_name(self, name: str) -> str:
         name = (name or "").strip()
@@ -240,29 +220,57 @@ class RpService:
             raise RpError(f"异常状态名称最多 {self.cfg['condition_max_length']} 个字。")
         return name
 
-    async def add_condition(self, guild_id: int, session_id: str, actor: Actor, user_id: int, name: str) -> None:
-        name = self._condition_name(name)
-        async with self.store.transaction(guild_id) as doc:
-            s = self._locate(doc, session_id, actor)
-            p = self._player(s, user_id)
-            if any(c["name"] == name for c in p["conditions"]):
-                raise RpError(f"这位玩家已经有「{name}」了。")
-            p["conditions"].append({"name": name, "created_by": str(actor.user_id), "created_at": self._now()})
-            self._event(s, actor, "CONDITION_ADD", str(user_id), None, name,
-                        announce={"kind": "player", "user_id": str(user_id), "changes": {},
-                                  "condition_change": ["+", name]})
+    async def update_player(self, guild_id: int, session_id: str, actor: Actor, user_id: int, *,
+                            stats: dict[str, str | None] | None = None, add: list[str] = (),
+                            remove: list[str] = ()) -> dict | None:
+        """一次结算：理智 / 发情值增减或设值，加上新增、解除异常，全部一起校验、一起保存，只发一条公告。
 
-    async def remove_condition(self, guild_id: int, session_id: str, actor: Actor, user_id: int, name: str) -> None:
+        任何一项不合法（绝对值越界、异常已存在 / 不存在）整次不生效。每项实际变化各记一条审计事件；
+        什么都没变时返回 None、不发公告。"""
+        lo, hi = self.cfg["stat_min"], self.cfg["stat_max"]
+        parsed = {k: parse_stat_input(v) for k, v in (stats or {}).items() if k in STATS}
+        for key, cmd in parsed.items():
+            if cmd and cmd[0] == "set" and not lo <= cmd[1] <= hi:
+                raise RpError(f"{STATS[key]}只能设为 {lo}–{hi}。")
+        add = list(dict.fromkeys(self._condition_name(n) for n in add))
+        remove = list(dict.fromkeys((n or "").strip() for n in remove if (n or "").strip()))
+        if set(add) & set(remove):
+            raise RpError("同一个异常不能同时新增和解除。")
         async with self.store.transaction(guild_id) as doc:
             s = self._locate(doc, session_id, actor)
             p = self._player(s, user_id)
-            match = next((c for c in p["conditions"] if c["name"] == name), None)
-            if match is None:
-                raise RpError(f"这位玩家没有「{name}」。")
-            p["conditions"].remove(match)
-            self._event(s, actor, "CONDITION_REMOVE", str(user_id), name, None,
-                        announce={"kind": "player", "user_id": str(user_id), "changes": {},
-                                  "condition_change": ["-", name]})
+            have = {c["name"] for c in p["conditions"]}
+            for name in add:
+                if name in have:
+                    raise RpError(f"这位玩家已经有「{name}」了。")
+            for name in remove:
+                if name not in have:
+                    raise RpError(f"这位玩家没有「{name}」。")
+            changes, cond_changes, target = {}, [], str(user_id)
+            for key, cmd in parsed.items():
+                if cmd is None:
+                    continue
+                before = p[key]
+                after = max(lo, min(hi, before + cmd[1])) if cmd[0] == "delta" else cmd[1]
+                if after != before:
+                    p[key] = after
+                    changes[key] = [before, after]
+                    self._event(s, actor, "STAT_DELTA" if cmd[0] == "delta" else "STAT_SET", target,
+                                before, after, {"stat": key, "input": cmd[1]})
+            for name in remove:
+                p["conditions"] = [c for c in p["conditions"] if c["name"] != name]
+                self._event(s, actor, "CONDITION_REMOVE", target, name, None)
+                cond_changes.append(["-", name])
+            for name in add:
+                p["conditions"].append({"name": name, "created_by": str(actor.user_id), "created_at": self._now()})
+                self._event(s, actor, "CONDITION_ADD", target, None, name)
+                cond_changes.append(["+", name])
+            if not changes and not cond_changes:
+                return None
+            s["pending_announcements"].append({"event_id": s["events"][-1]["id"], "actor": str(actor.user_id),
+                                               "kind": "player", "user_id": target, "changes": changes,
+                                               "condition_changes": cond_changes})
+        return {"changes": changes, "condition_changes": cond_changes}
 
     # ------------------------------------------------------------------ 进度
 
