@@ -8,6 +8,7 @@
 > :TB_conglong: **龙骧军** — 皇族
 
 - 玩家**第一次**点其中一个表情 → 自动加上对应阵营身份组，表情保留（相当于一票）。
+- 加入成功后在水区（`announce_channel_id`）播报该阵营的 `announce` 文案，`{user}` 处显示玩家名字（不 @ 提醒）。
 - 已经有阵营的人再点另一个阵营、或在这条消息上点任何其他表情 → 玉猫撤掉这个表情，身份组不变。
 - 取消自己的表情不会移除身份组：阵营一经选定不能更改（要换阵营请管理员手动改身份组）。
 - 以前发过的阵营消息重启后依然有效（消息 id 存在 `data/camp_war/messages.json`）。
@@ -16,8 +17,8 @@
 ## 配置（`config.json`）
 
 ```json
-"guilds": { "<服务器ID>": { "channel_id": <发消息的频道>, "camps": [
-  {"emoji": "<表情名>", "emoji_id": <表情ID>, "label": "<阵营名>", "description": "<阵营描述，可省略>", "role_id": <身份组ID>}, ... ] } }
+"guilds": { "<服务器ID>": { "channel_id": <发消息的频道>, "announce_channel_id": <播报频道>, "camps": [
+  {"emoji": "<表情名>", "emoji_id": <表情ID>, "label": "<阵营名>", "description": "<阵营描述，可省略>", "role_id": <身份组ID>, "announce": "<加入播报，{user} 换成玩家>"}, ... ] } }
 ```
 
 表情可以在玉猫所在的任何服务器（现在在云境测试服），按 `emoji_id` 查找；没写 id 时按名字找。发起时找不到表情会提示。

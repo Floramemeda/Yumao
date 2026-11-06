@@ -130,10 +130,28 @@ class CampWar(commands.Cog, name="CampWar"):
                     log.warning("阵营战：加身份组失败 user=%s: %s", member.id, e)
                     return await self._remove(payload, member)
                 self.claimed[key] = role.id
-                return
-            if picked is not None and current == int(picked["role_id"]):
+                joined = True
+            elif picked is not None and current == int(picked["role_id"]):
                 return                                          # 点回自己阵营的表情：保留
-        await self._remove(payload, member)                     # 已有阵营再点别的 / 无关表情：撤掉
+            else:
+                joined = False
+        if joined:
+            await self._announce(gcfg, picked, member)          # 锁外播报，不拖慢别人的点击
+        else:
+            await self._remove(payload, member)                 # 已有阵营再点别的 / 无关表情：撤掉
+
+    async def _announce(self, gcfg: dict, camp: dict, member: discord.Member) -> None:
+        """加入阵营后在水区播报（会显示名字，但不 @ 提醒）。"""
+        if not camp.get("announce") or not gcfg.get("announce_channel_id"):
+            return
+        channel = self.bot.get_channel(int(gcfg["announce_channel_id"]))
+        if channel is None:
+            return
+        try:
+            await channel.send(camp["announce"].format(user=member.mention),
+                               allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException as e:
+            log.warning("阵营战：播报失败 user=%s: %s", member.id, e)
 
     async def _remove(self, payload: discord.RawReactionActionEvent, member: discord.Member) -> None:
         channel = self.bot.get_channel(payload.channel_id)

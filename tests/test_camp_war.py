@@ -15,11 +15,13 @@ GUILD = 1541312608114581576
 GCFG = CFG["guilds"][str(GUILD)]
 TIGER, DRAGON = (int(c["role_id"]) for c in GCFG["camps"])
 BOT, MSG, CH = 999, 5000, int(GCFG["channel_id"])
+WATER = int(GCFG["announce_channel_id"])
 
 
 class FakeMember:
     def __init__(self, uid, roles=(), bot=False):
         self.id, self.bot = uid, bot
+        self.mention = f"<@{uid}>"
         self.roles = [NS(id=r) for r in roles]
         self.added = []
         self.fail = False
@@ -41,8 +43,8 @@ class FakeChannel:
             self.removed.append((mid, emoji.name, member.id))
         return NS(remove_reaction=remove_reaction)
 
-    async def send(self, embed=None):
-        self.sent.append(embed)
+    async def send(self, content=None, embed=None, allowed_mentions=None):
+        self.sent.append(embed if embed is not None else (content, allowed_mentions))
         reactions = []
 
         async def add_reaction(e):
@@ -63,6 +65,7 @@ class CampWarTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.file = Path(self.tmp.name) / "messages.json"
         self.channel = FakeChannel()
+        self.water = FakeChannel()
         roles = {TIGER: NS(id=TIGER), DRAGON: NS(id=DRAGON)}
         self.emojis = [NS(name=c["emoji"], id=int(c["emoji_id"])) for c in GCFG["camps"]]
         self.guild = NS(id=GUILD, get_role=roles.get, emojis=self.emojis,
@@ -70,7 +73,7 @@ class CampWarTests(unittest.IsolatedAsyncioTestCase):
         self.bot_emojis = list(self.emojis)
         bot = NS(user=NS(id=BOT), get_emoji=lambda i: next((e for e in self.bot_emojis if e.id == i), None),
                  emojis=self.bot_emojis, get_guild=lambda gid: self.guild if gid == GUILD else None,
-                 get_channel=lambda cid: self.channel if cid == CH else None)
+                 get_channel=lambda cid: {CH: self.channel, WATER: self.water}.get(cid))
         self.cog = CampWar(bot, CFG, self.file)
         self.cog.messages[str(MSG)] = str(GUILD)
 
@@ -81,6 +84,15 @@ class CampWarTests(unittest.IsolatedAsyncioTestCase):
         m = FakeMember(1)
         await self.cog.on_raw_reaction_add(payload(m, "TB_conghu"))
         self.assertEqual((m.added, self.channel.removed), ([TIGER], []))
+        text, allowed = self.water.sent[0]
+        self.assertEqual(text, "八百虎贲踏江去，十万魔兵丧胆还！<@1>誓死为虎贲军破袭擒贼！")
+        self.assertFalse(allowed.users)                                    # 显示名字但不 @ 提醒
+        d = FakeMember(2)
+        await self.cog.on_raw_reaction_add(payload(d, "TB_conglong"))
+        self.assertEqual(self.water.sent[1][0], "龙骧飞骑，天下无敌！飞骑将<@2>前来报到！")
+        await self.cog.on_raw_reaction_add(payload(d, "TB_conglong"))     # 再点自己阵营：不再播报
+        await self.cog.on_raw_reaction_add(payload(d, "TB_conghu"))       # 点别的：撤掉，不播报
+        self.assertEqual(len(self.water.sent), 2)
 
     async def test_later_clicks_removed(self):
         m = FakeMember(1, roles=[DRAGON])
