@@ -25,6 +25,7 @@ EXTENSIONS = [
     'minigames.keyword_alert',
     'minigames.trick_or_treat',
     'minigames.petpet',
+    'minigames.camp_war',
 ]
 
 

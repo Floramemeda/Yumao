@@ -1,0 +1,13 @@
+{
+  "guilds": {
+    "1541312608114581576": {
+      "channel_id": 1547945693715365969,
+      "camps": [
+        {"emoji": "TB_conghu", "emoji_id": 1568132664169332816, "label": "虎贲军", "description": "炼丹谷", "role_id": 1568132772839821322},
+        {"emoji": "TB_conglong", "emoji_id": 1568132703205859328, "label": "龙骧军", "description": "皇族", "role_id": 1568133892089839747}
+      ]
+    }
+  },
+  "default_title": "道友选择阵营：",
+  "data_file": "data/camp_war/messages.json"
+}
