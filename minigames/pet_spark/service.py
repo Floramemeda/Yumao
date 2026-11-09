@@ -19,7 +19,7 @@ import discord
 from ..common import PROJECT_ROOT, write_json_atomic
 from . import lines as lines_mod
 from . import renderer
-from .progress import CheckinResult, Progress, checkin, level_for, parse_levels, should_remind
+from .progress import CheckinResult, Progress, checkin, current_streak, level_for, parse_levels, should_remind
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,8 @@ class PetSparkService:
         self.deliveries: dict[str, dict] = {}
         # guild -> 最近一次完成催撸检查的本地日期
         self.reminder_runs: dict[str, str] = {}
+        # guild -> 最近一次完成连续撸猫身份组核对的本地日期
+        self.role_runs: dict[str, str] = {}
         self.lock = asyncio.Lock()
         self._load()
 
@@ -67,6 +69,7 @@ class PetSparkService:
             self.progress = {k: Progress.from_dict(v) for k, v in data.get("progress", {}).items()}
             self.deliveries = data.get("deliveries", {})
             self.reminder_runs = data.get("reminder_runs", {})
+            self.role_runs = data.get("role_runs", {})
         except (OSError, ValueError, KeyError) as e:
             # 不静默丢弃玩家的长期进度：把坏存档改名备份，再以空进度启动，避免拖垮整个 Bot
             backup = self.state_path.with_name(f"{self.state_path.stem}.corrupt-{int(self.clock().timestamp())}.json")
@@ -75,13 +78,14 @@ class PetSparkService:
                 self.state_path.rename(backup)
             except OSError:
                 log.exception("撸猫火花：备份坏存档失败")
-            self.progress, self.deliveries, self.reminder_runs = {}, {}, {}
+            self.progress, self.deliveries, self.reminder_runs, self.role_runs = {}, {}, {}, {}
 
     def save(self) -> None:
         write_json_atomic(self.state_path, {
             "progress": {k: p.to_dict() for k, p in self.progress.items()},
             "deliveries": self.deliveries,
             "reminder_runs": self.reminder_runs,
+            "role_runs": self.role_runs,
         })
 
     @staticmethod
@@ -134,6 +138,64 @@ class PetSparkService:
             p.updated_at = self.clock()
             self.save()
             return p
+
+    # ------------------------------------------------------------------ 连续撸猫身份组
+
+    def streak_role_guilds(self) -> list[int]:
+        return [int(gid) for gid, g in self.cfg.get("guilds", {}).items() if g.get("streak_role")]
+
+    async def _apply_streak_role(self, guild, role, p: Progress, days: int, today: date) -> None:
+        """让一个人的身份组和当前连续天数一致；不在服务器（或不在缓存）的人跳过，失败只记日志。"""
+        member = guild.get_member(p.user_id)
+        if member is None:
+            return
+        qualified = current_streak(p, today) >= days
+        has_role = any(r.id == role.id for r in member.roles)
+        try:
+            if qualified and not has_role:
+                await member.add_roles(role, reason=f"撸猫火花：连续撸猫 {days} 天")
+            elif has_role and not qualified:
+                await member.remove_roles(role, reason="撸猫火花：断签")
+        except discord.HTTPException as e:
+            log.warning("撸猫火花：身份组更新失败 guild=%s user=%s: %s", guild.id, p.user_id, e)
+
+    async def sync_member_role(self, guild_id: int, user_id: int) -> None:
+        """撸猫后调用：连续天数刚好达标时立刻发身份组。"""
+        cfg = self.guild_cfg(guild_id).get("streak_role")
+        guild = self.bot.get_guild(guild_id)
+        role = guild.get_role(int(cfg["role_id"])) if cfg and guild else None
+        if role is None:
+            return
+        async with self.lock:
+            p = self.progress.get(self._key(guild_id, user_id))
+            if p is not None:
+                await self._apply_streak_role(guild, role, p, int(cfg["days"]), self.today(guild_id))
+
+    async def role_tick(self) -> None:
+        """由定时循环频繁调用：每个 Guild 每个本地日核对一次，把断签的人的身份组收回（Bot 停机跨天也会补上）。
+
+        失败的人等下一次核对或下一次撸猫时重试。"""
+        for guild_id in self.streak_role_guilds():
+            today = self.today(guild_id)
+            if self.role_runs.get(str(guild_id)) == today.isoformat():
+                continue
+            try:
+                await self.run_role_sync(guild_id, today)
+            except Exception:
+                log.exception("撸猫火花：身份组核对失败 guild=%s", guild_id)
+
+    async def run_role_sync(self, guild_id: int, today: date) -> None:
+        cfg = self.guild_cfg(guild_id)["streak_role"]
+        guild = self.bot.get_guild(guild_id)
+        role = guild.get_role(int(cfg["role_id"])) if guild else None
+        async with self.lock:
+            if role is None:
+                log.warning("撸猫火花：guild=%s 找不到连续撸猫身份组，跳过今天的核对", guild_id)
+            else:
+                for p in [p for p in self.progress.values() if p.guild_id == guild_id]:
+                    await self._apply_streak_role(guild, role, p, int(cfg["days"]), today)
+            self.role_runs[str(guild_id)] = today.isoformat()
+            self.save()
 
     # ------------------------------------------------------------------ 催撸
 

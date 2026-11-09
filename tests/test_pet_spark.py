@@ -291,7 +291,26 @@ class FakeBot:
         return self.guilds.get(gid)
 
 
+class RoleMember:
+    def __init__(self, fail=False):
+        self.roles, self.calls, self.fail = [], [], fail
+
+    def role_ids(self):
+        return {r.id for r in self.roles}
+
+    async def add_roles(self, role, reason=None):
+        if self.fail:
+            raise discord.Forbidden(NS(status=403, reason="no"), "no perms")
+        self.roles.append(role)
+        self.calls.append("add")
+
+    async def remove_roles(self, role, reason=None):
+        self.roles.remove(role)
+        self.calls.append("remove")
+
+
 G1, G2 = 111, 222
+STREAK_ROLE = 7777
 CH1, CH2 = 1001, 2002
 
 
@@ -434,6 +453,73 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.checkin_on(5, 2)
         svc2 = self.new_service()
         self.assertEqual(svc2.progress[f"{G1}:5"].streak_count, 2)
+
+    def streak_setup(self, members):
+        """G1 配上「连续 3 天」身份组，换成带身份组的成员。"""
+        self.cfg["guilds"][str(G1)]["streak_role"] = {"role_id": STREAK_ROLE, "days": 3}
+        role = NS(id=STREAK_ROLE)
+        self.bot.guilds[G1] = NS(id=G1, get_role=lambda rid: role if rid == STREAK_ROLE else None,
+                                 get_member=members.get)
+        self.svc = self.new_service()
+
+    async def pet_on(self, uid, local_day):
+        await self.checkin_on(uid, local_day)
+        await self.svc.sync_member_role(G1, uid)
+
+    async def test_streak_role_granted_on_reaching_days(self):
+        m = RoleMember()
+        self.streak_setup({1: m})
+        await self.pet_on(1, 1)
+        await self.pet_on(1, 2)
+        self.assertEqual(m.role_ids(), set())
+        await self.pet_on(1, 3)
+        self.assertEqual(m.role_ids(), {STREAK_ROLE})
+        await self.pet_on(1, 3)                                     # 同一天再撸：不重复加
+        await self.pet_on(1, 4)
+        self.assertEqual(m.calls, ["add"])
+
+    async def test_streak_role_removed_after_break(self):
+        m = RoleMember()
+        self.streak_setup({1: m})
+        for d in (1, 2, 3):
+            await self.pet_on(1, d)
+        self.clock.set_local(2026, 10, 4, 23, 59)                   # 第 4 天没撸，但当天还来得及：不收
+        await self.svc.role_tick()
+        self.assertEqual(m.role_ids(), {STREAK_ROLE})
+        self.clock.set_local(2026, 10, 5, 0, 0)                     # 过了午夜：断签，收回
+        await self.svc.role_tick()
+        self.assertEqual(m.role_ids(), set())
+        await self.pet_on(1, 5)                                     # 重新从 1 开始，不会马上发回来
+        self.assertEqual(m.role_ids(), set())
+
+    async def test_role_tick_once_a_day_and_survives_restart(self):
+        m = RoleMember()
+        self.streak_setup({1: m})
+        for d in (1, 2, 3):
+            await self.checkin_on(1, d)                             # 撸猫后没来得及发（比如回复失败）
+        await self.svc.role_tick()
+        self.assertEqual(m.calls, ["add"])                          # 核对时补发
+        m.roles.clear()
+        await self.new_service().role_tick()                        # 重启后同一天不再核对
+        self.assertEqual(m.calls, ["add"])
+
+    async def test_role_sync_failure_and_missing_are_safe(self):
+        bad, ok = RoleMember(fail=True), RoleMember()
+        self.streak_setup({1: bad, 2: ok})
+        for uid in (1, 2, 3):                                       # 3 号已退服
+            for d in (1, 2, 3):
+                await self.checkin_on(uid, d)
+        await self.svc.role_tick()
+        self.assertEqual((bad.role_ids(), ok.role_ids()), (set(), {STREAK_ROLE}))
+        self.bot.guilds[G1].get_role = lambda rid: None             # 身份组被删：跳过，不报错
+        self.clock.set_local(2026, 10, 9, 12, 0)
+        await self.svc.role_tick()
+        await self.svc.sync_member_role(G1, 2)
+        self.assertEqual(ok.role_ids(), {STREAK_ROLE})
+
+    def test_real_streak_role_config(self):
+        cfg = CFG["guilds"]["1541312608114581576"]["streak_role"]
+        self.assertEqual((cfg["role_id"], cfg["days"]), (1569137929320792195, 30))
 
     async def test_corrupt_state_is_backed_up(self):
         Path(self.cfg["state_file"]).write_text("{not json", encoding="utf-8")

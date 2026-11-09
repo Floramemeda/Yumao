@@ -28,6 +28,7 @@ class PetSpark(commands.Cog, name=views.COG_NAME):
     @tasks.loop(seconds=30)
     async def reminder_loop(self):
         await self.service.reminder_tick()
+        await self.service.role_tick()
 
     @reminder_loop.before_loop
     async def _wait_ready(self):
@@ -64,6 +65,7 @@ class PetSpark(commands.Cog, name=views.COG_NAME):
         content = self.service.checkin_message(interaction.user.id, p, result, today)
         await interaction.response.send_message(content, view=views.pet_view(),
                                                 allowed_mentions=discord.AllowedMentions.none())
+        await self.service.sync_member_role(interaction.guild_id, interaction.user.id)
 
     async def toggle_reminder(self, interaction: discord.Interaction, opt_out: bool) -> None:
         if interaction.guild_id is None:

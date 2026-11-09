@@ -5,7 +5,8 @@
     "1541312608114581576": {
       "timezone": "Asia/Shanghai",
       "reminder_enabled": true,
-      "reminder_channel_id": 1544878105594830888
+      "reminder_channel_id": 1544878105594830888,
+      "streak_role": {"role_id": 1569137929320792195, "days": 30}
     }
   },
 
