@@ -19,11 +19,12 @@ import discord
 from ..common import PROJECT_ROOT, write_json_atomic
 from . import lines as lines_mod
 from . import renderer
-from .progress import CheckinResult, Progress, checkin, current_streak, level_for, parse_levels, should_remind
+from .progress import SPARK_MIN_STREAK, CheckinResult, Progress, checkin, current_streak, level_for, parse_levels, should_remind
 
 log = logging.getLogger(__name__)
 
 DISCORD_MESSAGE_LIMIT = 2000
+BREAK_WINDOW_DAYS = 3   # 断撸只在断签后的几天内通报：刚上线时不会把历史上早就断了的人一次性全报一遍
 
 
 def _utcnow() -> datetime:
@@ -55,6 +56,8 @@ class PetSparkService:
         self.reminder_runs: dict[str, str] = {}
         # guild -> 最近一次完成连续撸猫身份组核对的本地日期
         self.role_runs: dict[str, str] = {}
+        # "(guild):(user):(最后一次撸猫的本地日期)" -> {"status": reserved/sent/skipped, "at": iso}：一次断撸只通报一次
+        self.breaks: dict[str, dict] = {}
         self.lock = asyncio.Lock()
         self._load()
 
@@ -70,6 +73,7 @@ class PetSparkService:
             self.deliveries = data.get("deliveries", {})
             self.reminder_runs = data.get("reminder_runs", {})
             self.role_runs = data.get("role_runs", {})
+            self.breaks = data.get("breaks", {})
         except (OSError, ValueError, KeyError) as e:
             # 不静默丢弃玩家的长期进度：把坏存档改名备份，再以空进度启动，避免拖垮整个 Bot
             backup = self.state_path.with_name(f"{self.state_path.stem}.corrupt-{int(self.clock().timestamp())}.json")
@@ -78,7 +82,7 @@ class PetSparkService:
                 self.state_path.rename(backup)
             except OSError:
                 log.exception("撸猫火花：备份坏存档失败")
-            self.progress, self.deliveries, self.reminder_runs, self.role_runs = {}, {}, {}, {}
+            self.progress, self.deliveries, self.reminder_runs, self.role_runs, self.breaks = {}, {}, {}, {}, {}
 
     def save(self) -> None:
         write_json_atomic(self.state_path, {
@@ -86,6 +90,7 @@ class PetSparkService:
             "deliveries": self.deliveries,
             "reminder_runs": self.reminder_runs,
             "role_runs": self.role_runs,
+            "breaks": self.breaks,
         })
 
     @staticmethod
@@ -196,6 +201,58 @@ class PetSparkService:
                     await self._apply_streak_role(guild, role, p, int(cfg["days"]), today)
             self.role_runs[str(guild_id)] = today.isoformat()
             self.save()
+            await self._announce_breaks(guild_id, today)
+
+    # ------------------------------------------------------------------ 断撸通报
+
+    @staticmethod
+    def break_message(user_id: int, streak: int, last: date) -> str:
+        """固定格式，云州 Bot 按这个格式识别并扣信用分，改措辞前请先和云州那边对一下。"""
+        return f"🐾 玉猫断撸：<@{user_id}> 连续 {streak} 天后中断（最后一次撸猫 {last.isoformat()}）"
+
+    async def _announce_breaks(self, guild_id: int, today: date) -> list[int]:
+        """火花点亮过（连续 ≥ 2 天）的人断签后，在 `break_channel_id` 通报一次；每次断签只一条，重启不会重复。已持有 `self.lock`。"""
+        channel_id = self.guild_cfg(guild_id).get("break_channel_id")
+        if not channel_id:
+            return []
+        channel = await self._reminder_channel(channel_id)
+        guild = self.bot.get_guild(guild_id)
+        if channel is None or guild is None:
+            log.warning("撸猫火花：guild=%s 的断撸通报频道不可用，跳过", guild_id)
+            return []
+        if getattr(channel, "archived", False):                    # 通报频道是子区时，被自动归档了就先打开
+            try:
+                await channel.edit(archived=False)
+            except discord.HTTPException as e:
+                log.warning("撸猫火花：无法取消断撸通报子区的归档: %s", e)
+        yesterday, earliest = today - timedelta(days=1), today - timedelta(days=BREAK_WINDOW_DAYS)
+        sent: list[int] = []
+        for p in sorted((p for p in self.progress.values() if p.guild_id == guild_id), key=lambda p: p.user_id):
+            last = p.last_checkin_local_date
+            if last is None or p.streak_count < SPARK_MIN_STREAK or last >= yesterday or last < earliest:
+                continue
+            key = f"{guild_id}:{p.user_id}:{last.isoformat()}"
+            if key in self.breaks:
+                continue
+            if not await self._is_member(guild, p.user_id):
+                self.breaks[key] = {"status": "skipped", "at": self.clock().isoformat()}
+                continue
+            self.breaks[key] = {"status": "reserved", "at": self.clock().isoformat()}      # 先落盘再发送，中途崩溃不会重复通报
+            self.save()
+            try:
+                await channel.send(self.break_message(p.user_id, p.streak_count, last), allowed_mentions=discord.AllowedMentions.none())
+                self.breaks[key]["status"] = "sent"
+                sent.append(p.user_id)
+            except discord.HTTPException as e:
+                log.warning("撸猫火花：断撸通报发送失败 guild=%s user=%s: %s", guild_id, p.user_id, e)
+                del self.breaks[key]                                                      # 下次核对再试（消息里带最后撸猫日期，对面按它去重）
+            self.save()
+        self._prune_breaks(today)
+        return sent
+
+    def _prune_breaks(self, today: date) -> None:
+        keep_from = today - timedelta(days=30)
+        self.breaks = {k: v for k, v in self.breaks.items() if date.fromisoformat(k.rsplit(":", 1)[1]) >= keep_from}
 
     # ------------------------------------------------------------------ 催撸
 

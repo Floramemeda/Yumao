@@ -517,6 +517,46 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.svc.sync_member_role(G1, 2)
         self.assertEqual(ok.role_ids(), {STREAK_ROLE})
 
+    async def test_break_is_announced_once_for_a_lit_spark_only(self):
+        self.streak_setup({u: RoleMember() for u in (1, 2, 3)})
+        self.cfg["guilds"][str(G1)]["break_channel_id"] = CH2
+        self.bot.channels[CH2] = brk = FakeChannel()
+        for d in (1, 2, 3):
+            await self.checkin_on(1, d)                             # 火花点亮过，之后断了
+        await self.checkin_on(2, 3)                                 # 只撸了一天：没有点亮过火花，不算
+        for d in (1, 2):
+            await self.checkin_on(3, d)
+        await self.checkin_on(3, 4)                                 # 3 号隔天又撸了，没断
+        self.svc = self.new_service()
+        self.clock.set_local(2026, 10, 4, 12, 0)                    # 第 4 天还来得及：不通报
+        await self.svc.role_tick()
+        self.assertEqual(brk.sent, [])
+        self.clock.set_local(2026, 10, 5, 0, 30)                    # 过了午夜，1 号第 4 天没撸 -> 断
+        await self.svc.role_tick()
+        self.assertEqual([c for c, _ in brk.sent], ["🐾 玉猫断撸：<@1> 连续 3 天后中断（最后一次撸猫 2026-10-03）"])
+        self.assertFalse(brk.sent[0][1].users)                       # 不 @ 提醒
+        self.svc.role_runs.clear()                                  # 当天再核对 / 重启：不重复
+        await self.new_service().role_tick()
+        self.assertEqual(len(brk.sent), 1)
+        await self.svc.role_tick()
+        self.assertEqual(len(brk.sent), 1)
+
+    async def test_old_breaks_are_not_announced_on_the_first_run_and_failures_retry(self):
+        self.streak_setup({u: RoleMember() for u in (1, 2, 3)})
+        self.cfg["guilds"][str(G1)]["break_channel_id"] = CH2
+        self.bot.channels[CH2] = brk = FakeChannel(fail=True)
+        for uid, days in ((1, (1, 2)), (2, (1, 2, 3, 4))):
+            for d in days:
+                await self.checkin_on(uid, d)
+        self.svc = self.new_service()
+        self.clock.set_local(2026, 10, 7, 0, 30)                    # 1 号 10/2 断（早就断了）；2 号 10/4 最后撸，10/6 没撸 -> 刚断
+        await self.svc.role_tick()
+        self.assertEqual(brk.sent, [])                              # 发送失败：不记账
+        brk.fail = False
+        self.svc.role_runs.clear()
+        await self.svc.role_tick()
+        self.assertEqual([c for c, _ in brk.sent], ["🐾 玉猫断撸：<@2> 连续 4 天后中断（最后一次撸猫 2026-10-04）"])
+
     def test_real_streak_role_config(self):
         cfg = CFG["guilds"]["1541312608114581576"]["streak_role"]
         self.assertEqual((cfg["role_id"], cfg["days"]), (1569137929320792195, 30))
