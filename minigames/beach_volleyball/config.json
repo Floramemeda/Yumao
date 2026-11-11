@@ -1,0 +1,23 @@
+{
+  "min_players": 2,
+  "max_players": 10,
+  "default_target_score": 12,
+  "lobby_timeout_seconds": 600,
+  "serve_timeout_seconds": 45,
+  "receive_timeout_seconds": 60,
+  "max_idle_rounds": 3,
+
+  "parts": {
+    "hand":  {"score": 1, "chance": 0.85},
+    "chest": {"score": 3, "chance": 0.55, "garment": "top"},
+    "butt":  {"score": 3, "chance": 0.55, "garment": "bottom"}
+  },
+  "miss_score": 1,
+  "friendly_fire": {"chance": 0.25, "parts": ["chest", "butt"]},
+  "excitement_steps": [25, 50, 100],
+
+  "allowed_channel_ids": [],
+  "allowed_category_ids": [],
+
+  "state_file": "data/beach_volleyball_state.json"
+}

@@ -26,6 +26,7 @@ EXTENSIONS = [
     'minigames.trick_or_treat',
     'minigames.petpet',
     'minigames.camp_war',
+    'minigames.beach_volleyball',
 ]
 
 
