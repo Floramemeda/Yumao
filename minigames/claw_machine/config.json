@@ -6,6 +6,9 @@
   "gift_expire_hours": 24,
   "doll_id_prefix": "YZ-",
   "max_showcase": 5,
+  "announce_channel_id": 1544878105594830888,
+  "announce_max_attempts": 30,
+  "announce_history_check": 50,
   "page_size": 8,
   "candidates_per_game": 3,
   "data_dir": "data/claw_machine",
@@ -100,20 +103,26 @@
 
   "easter_eggs": [
     {"id": "eternal_resident", "title": "秘境永久居民", "priority": 0,
+     "emoji": "🛏️", "reveal_text": "别抓了，五舅的地铺还在秘境门口！",
      "story": "五舅经常在秘境外打地铺。",
      "match": {"subject": "五舅", "mood": "秘境外打地铺的", "toy": "毛绒睡袋"}},
     {"id": "potato_thief", "title": "薯饼大盗", "priority": 0,
+     "emoji": "🥔", "reveal_text": "抓到了！偷薯饼的居然是老板娘本人！",
      "story": "薯饼是青楼特产，青楼老板娘经常偷吃自己青楼的薯饼。",
      "match": {"subject": "青楼老板娘", "mood": "偷薯饼的"}},
     {"id": "debt_no_worry", "title": "债多不压身", "priority": 0,
+     "emoji": "💸", "reveal_text": "灵石可以欠，惊鸿鉴不能不抽！",
      "story": "小小酥负债累累，却依然沉迷惊鸿鉴抽卡。",
      "match": {"subject": "小小酥", "mood": "沉迷惊鸿鉴的"}},
     {"id": "long_rang_jun", "title": "龙嚷军", "priority": 0,
+     "emoji": "👑", "reveal_text": "陛下，是龙骧军，不是龙嚷军啊！",
      "story": "女帝是个呆萌文盲，曾将「龙骧军」读成「龙嚷军」。",
      "match": {"subject": "女帝", "mood": "一脸智慧的", "quirk": "总把龙骧军念成龙嚷军"}},
-    {"id": "snowball_grows", "title": "越滚越大", "priority": 0, "story": "",
+    {"id": "snowball_grows", "title": "越滚越大", "priority": 0,
+     "emoji": "☃️", "reveal_text": "雪球滚雪球，最后到底谁滚谁？", "story": "",
      "match": {"subject": "雪球", "mood": "滚雪球的"}},
-    {"id": "hiss_warning", "title": "哈气警告", "priority": 0, "story": "",
+    {"id": "hiss_warning", "title": "哈气警告", "priority": 0,
+     "emoji": "😾", "reveal_text": "哈——！你抓的真的是娃娃吗？", "story": "",
      "match": {"subject": "玉猫", "mood": "正在哈气的"}}
   ]
 }

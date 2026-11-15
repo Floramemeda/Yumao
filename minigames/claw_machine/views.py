@@ -234,4 +234,34 @@ class GiftPickView(discord.ui.View):
         await interaction.response.edit_message(content="已取消赠送。", embed=None, view=None)
 
 
+class EggBookView(discord.ui.View):
+    """图鉴：下拉只列出自己已发现的彩蛋（没发现的不出现在选项里，避免泄露称号）。"""
+
+    def __init__(self, cog: ClawMachine, eggs: list[dict], mine: dict, back: bool = False):
+        super().__init__(timeout=600)
+        self.cog = cog
+        found = [e for e in eggs if e["id"] in mine]
+        if found:
+            pick = discord.ui.Select(placeholder="查看名场面详情……", options=[
+                discord.SelectOption(label=e["title"], value=e["id"], emoji=e.get("emoji") or "✨") for e in found])
+            pick.callback = self._pick
+            self.add_item(pick)
+        if back:
+            home = discord.ui.Button(label="返回图鉴", emoji="📖")
+            home.callback = self._home
+            self.add_item(home)
+        firsts = discord.ui.Button(label="全服首发现", emoji="🏆")
+        firsts.callback = self._firsts
+        self.add_item(firsts)
+
+    async def _pick(self, interaction: discord.Interaction):
+        await self.cog.show_egg_detail(interaction, interaction.data["values"][0])
+
+    async def _home(self, interaction: discord.Interaction):
+        await self.cog.show_egg_book(interaction, edit=True)
+
+    async def _firsts(self, interaction: discord.Interaction):
+        await self.cog.show_discoveries(interaction, edit=True)
+
+
 DYNAMIC_ITEMS = (GameButton, CollectionButton, GiveButton, GiftButton)

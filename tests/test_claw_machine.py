@@ -164,10 +164,10 @@ class EngineTests(unittest.TestCase):
     def test_most_specific_then_priority(self):
         cfg = copy.deepcopy(CFG)
         cfg["easter_eggs"] = [
-            {"id": "two", "title": "2", "priority": 9, "match": {"subject": "玉猫", "mood": "正在哈气的"}},
-            {"id": "three", "title": "3", "priority": 0,
+            {"id": "two", "title": "2", "reveal_text": "r", "emoji": "✨", "priority": 9, "match": {"subject": "玉猫", "mood": "正在哈气的"}},
+            {"id": "three", "title": "3", "reveal_text": "r", "emoji": "✨", "priority": 0,
              "match": {"subject": "玉猫", "mood": "正在哈气的", "toy": "毛绒团子"}},
-            {"id": "three_hi", "title": "3h", "priority": 5,
+            {"id": "three_hi", "title": "3h", "reveal_text": "r", "emoji": "✨", "priority": 5,
              "match": {"subject": "玉猫", "mood": "正在哈气的", "quirk": "脑门上贴着一张镇妖符"}},
         ]
         engine.prepare(cfg)
@@ -177,10 +177,10 @@ class EngineTests(unittest.TestCase):
 
     def test_bad_egg_config(self):
         cfg = copy.deepcopy(CFG)
-        cfg["easter_eggs"] = [{"id": "x", "title": "x", "match": {"subject": "不存在", "mood": "偷薯饼的"}}]
+        cfg["easter_eggs"] = [{"id": "x", "title": "x", "reveal_text": "r", "emoji": "✨", "match": {"subject": "不存在", "mood": "偷薯饼的"}}]
         with self.assertRaises(engine.ConfigError):
             engine.prepare(cfg)
-        cfg["easter_eggs"] = [{"id": "x", "title": "x", "match": {"subject": "玉猫"}}]
+        cfg["easter_eggs"] = [{"id": "x", "title": "x", "reveal_text": "r", "emoji": "✨", "match": {"subject": "玉猫"}}]
         with self.assertRaises(engine.ConfigError):
             engine.prepare(cfg)
 
@@ -586,6 +586,244 @@ class CogTests(Base):
         await cog2.on_message(message(TICKET_BOT, ticket_text(event="R1"), self.channel))   # 回扫到同一条
         self.assertEqual(svc2.pending_games(G, A)[0]["candidates"], before)
         self.assertEqual(len(self.channel.sent), 1)
+
+
+# ---------------------------------------------------------------------- 彩蛋：图鉴、首发现、公告
+
+EGG_CANDS = {
+    "eternal_resident": lambda: cand("五舅", "秘境外打地铺的", "毛绒睡袋", "口袋里藏着一张假藏宝图"),
+    "potato_thief": lambda: cand("青楼老板娘", "偷薯饼的", "八音盒"),
+    "debt_no_worry": lambda: cand("小小酥", "沉迷惊鸿鉴的"),
+    "long_rang_jun": lambda: cand("女帝", "一脸智慧的", "尖叫小黄鸭", "总把龙骧军念成龙嚷军"),
+    "snowball_grows": lambda: cand("雪球", "滚雪球的"),
+    "hiss_warning": lambda: cand("玉猫", "正在哈气的"),
+}
+
+
+class EggTests(Base):
+    async def test_every_egg_has_reveal_and_emoji(self):
+        self.assertEqual([e["id"] for e in CFG["_eggs"]], list(EGG_CANDS))
+        for e in CFG["_eggs"]:
+            self.assertTrue(e["reveal_text"] and e["emoji"])
+
+    async def test_six_eggs_settle_with_special_style(self):
+        for eid, make in EGG_CANDS.items():
+            doll = await self.win(make())
+            self.assertEqual(doll["egg"]["id"], eid)
+            game = self.svc.game(G, doll["source_game_id"])
+            embed = ui.result_embed(CFG, game, doll)
+            self.assertEqual(embed.color, ui.COLOR_EGG)
+            self.assertEqual(embed.title, "✨✨ 检测到异常共鸣！ ✨✨")
+            self.assertIn(doll["egg"]["reveal_text"], embed.description)
+            self.assertIn(doll["names"]["quirk"], embed.description)
+            self.assertIn("全服第一位", embed.description)
+
+    async def test_long_rang_example(self):
+        doll = await self.win(EGG_CANDS["long_rang_jun"]())
+        embed = ui.result_embed(CFG, self.svc.game(G, doll["source_game_id"]), doll)
+        for text in ("👑 **一脸智慧的女帝尖叫小黄鸭**", "总把龙骧军念成龙嚷军", "🏆 隐藏称号：**龙嚷军**",
+                     "「陛下，是龙骧军，不是龙嚷军啊！」", "`YZ-000001`", f"<@{A}>"):
+            self.assertIn(text, embed.description)
+
+    async def test_normal_doll_keeps_normal_style(self):
+        doll = await self.win(cand())
+        embed = ui.result_embed(CFG, self.svc.game(G, doll["source_game_id"]), doll)
+        self.assertEqual(embed.title, "🎉 抓取成功！")
+        self.assertNotEqual(embed.color, ui.COLOR_EGG)
+        self.assertEqual(ui.detail_embed(doll).title, "🧸 娃娃详情")
+        self.assertEqual(self.svc.first_discoveries(G), {})
+        self.assertEqual(self.svc.discoveries(G, A), {})
+
+    async def test_egg_card(self):
+        doll = await self.win(EGG_CANDS["potato_thief"]())
+        card = ui.detail_embed(doll)
+        self.assertEqual(card.color, ui.COLOR_EGG)
+        for text in ("✨", "薯饼大盗", "老板娘经常偷吃", "青楼老板娘", "偷薯饼的", "八音盒",
+                     doll["names"]["quirk"], doll["id"], f"原始抓获者：<@{A}>"):
+            self.assertIn(text, card.title + card.description)
+
+    async def test_personal_discovery_once(self):
+        d1 = await self.win(EGG_CANDS["hiss_warning"]())
+        self.clock.t += timedelta(hours=1)
+        d2 = await self.win(cand("玉猫", "正在哈气的", "八音盒"))
+        mine = self.svc.discoveries(G, A)
+        self.assertEqual(list(mine), ["hiss_warning"])
+        self.assertEqual(mine["hiss_warning"]["doll_id"], d1["id"])
+        r2 = self.svc.game(G, d2["source_game_id"])["result"]
+        self.assertNotIn("new_discovery", r2)
+        self.assertNotIn("server_first", r2)
+        self.assertEqual(self.svc.stats(G, A)["eggs"], 1)
+
+    async def test_gift_does_not_unlock_or_remove(self):
+        doll = await self.win(EGG_CANDS["debt_no_worry"]())
+        g = await self.svc.create_gift(G, A, doll["id"], B)
+        _, d, _ = await self.svc.respond_gift(G, g["id"], B, "accept")
+        self.assertEqual(self.svc.discoveries(G, B), {})
+        self.assertIn("debt_no_worry", self.svc.discoveries(G, A))
+        self.assertEqual((d["id"], d["original_owner_id"], d["egg"]["id"]), (doll["id"], str(A), "debt_no_worry"))
+        self.assertEqual(self.svc.first_discoveries(G)["debt_no_worry"]["user_id"], str(A))
+        self.assertEqual(ui.detail_embed(d).color, ui.COLOR_EGG)
+
+    async def test_second_player_not_server_first(self):
+        await self.win(EGG_CANDS["snowball_grows"](), user=A)
+        doll_b = await self.win(EGG_CANDS["snowball_grows"](), user=B)
+        r = self.svc.game(G, doll_b["source_game_id"])["result"]
+        self.assertTrue(r["new_discovery"])
+        self.assertNotIn("server_first", r)
+        self.assertEqual(self.svc.first_discoveries(G)["snowball_grows"]["user_id"], str(A))
+        self.assertEqual(len(self.svc.pending_announcements(G)), 1)
+
+    async def test_concurrent_first_discovery(self):
+        ga = await self.game_with(EGG_CANDS["long_rang_jun"](), user=A)
+        gb = await self.game_with(EGG_CANDS["long_rang_jun"](), user=B)
+        res = await asyncio.gather(self.svc.grab(G, ga, A, 0, "front"), self.svc.grab(G, gb, B, 0, "front"))
+        firsts = [g["result"].get("server_first") for g, _, _ in res]
+        self.assertEqual(firsts.count(True), 1)
+        winner = self.svc.first_discoveries(G)["long_rang_jun"]
+        self.assertIn(winner["user_id"], (str(A), str(B)))
+        self.assertEqual(len(self.svc.pending_announcements(G)), 1)
+        self.assertEqual(len(self.svc.discoveries(G, A)) + len(self.svc.discoveries(G, B)), 2)
+
+    async def test_repeat_click_no_duplicate_first(self):
+        gid = await self.game_with(EGG_CANDS["hiss_warning"]())
+        await asyncio.gather(*[self.svc.grab(G, gid, A, 0, "front") for _ in range(4)])
+        self.assertEqual(len(self.svc.first_discoveries(G)), 1)
+        self.assertEqual(len(self.svc.store.load(G)["dolls"]), 1)
+
+    async def test_book_hides_locked_slots(self):
+        await self.win(EGG_CANDS["debt_no_worry"]())
+        mine = self.svc.discoveries(G, A)
+        text = ui.egg_book_embed(A, CFG["_eggs"], mine).description
+        self.assertIn("1 / 6", text)
+        self.assertIn("债多不压身", text)
+        self.assertEqual(text.count("🔒 **？？？**"), 5)
+        for e in CFG["_eggs"]:
+            if e["id"] != "debt_no_worry":
+                self.assertNotIn(e["title"], text)
+                for name in e["match"].values():
+                    self.assertNotIn(name, text)
+        firsts_text = ui.discoveries_embed(CFG["_eggs"], self.svc.first_discoveries(G)).description
+        self.assertIn("债多不压身", firsts_text)
+        self.assertNotIn("龙嚷军", firsts_text)
+
+    async def test_egg_detail_separates_first_and_mine(self):
+        await self.win(EGG_CANDS["potato_thief"](), user=A)
+        await self.win(EGG_CANDS["potato_thief"](), user=B)
+        egg = engine.egg_rule(CFG, "potato_thief")
+        text = ui.egg_detail_embed(egg, self.svc.first_discoveries(G)["potato_thief"],
+                                   self.svc.discoveries(G, B)["potato_thief"]).description
+        self.assertIn(f"全服首发现者：<@{A}>", text)
+        self.assertIn("YZ-000001", text)
+        self.assertIn("你的首次抓获：`YZ-000002`", text)
+
+    async def test_backfill_legacy_save(self):
+        await self.win(EGG_CANDS["hiss_warning"]())
+        async with self.svc.store.transaction(G) as doc:
+            del doc["egg_discoveries"]
+        raw = self.svc.store.path(G).read_text(encoding="utf-8")
+        import json
+        data = json.loads(raw)
+        data.pop("first_discoveries")
+        self.svc.store.path(G).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        svc2 = self.new_service()
+        self.assertIn("hiss_warning", svc2.discoveries(G, A))
+        self.assertEqual(svc2.first_discoveries(G)["hiss_warning"]["announcement_status"], "skipped")
+        self.assertEqual(svc2.pending_announcements(G), [])
+
+
+class AnnounceChannel(FakeChannel):
+    def __init__(self, cid):
+        super().__init__(cid)
+        self.fail = 0
+
+    async def send(self, content=None, **kw):
+        if self.fail:
+            self.fail -= 1
+            raise discord.HTTPException(NS(status=500, reason="boom"), "boom")
+        msg = await super().send(content, **kw)
+        msg.author = NS(id=4242)
+        msg.embeds = [kw["embed"]]
+        return msg
+
+    def history(self, limit=50):
+        sent = list(reversed(self.sent))
+
+        async def gen():
+            for m in sent[:limit]:
+                yield m
+        return gen()
+
+
+class AnnounceTests(Base):
+    ANN = 777
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        cfg = copy.deepcopy(CFG)
+        cfg["trusted_bot_ids"], cfg["channel_ids"], cfg["announce_channel_id"] = [TICKET_BOT], [CH], self.ANN
+        self.svc.cfg = engine.prepare(cfg)
+        self.channel, self.ann = FakeChannel(), AnnounceChannel(self.ANN)
+        chans = {CH: self.channel, self.ANN: self.ann}
+        self.bot = NS(get_channel=chans.get, user=NS(id=4242))
+        self.cog = ClawMachine(self.bot, self.svc)
+
+    async def play(self, c, user=A):
+        gid = await self.game_with(c, user)
+        it = interaction(user, msg_id=0)
+        await self.cog.handle_game(it, "go", gid, 0, "front")
+        return gid
+
+    async def test_announces_once(self):
+        await self.play(EGG_CANDS["long_rang_jun"]())
+        self.assertEqual(len(self.ann.sent), 1)
+        embed = self.ann.sent[0].embed
+        self.assertEqual(embed.title, "🏆 云州奇闻录 · 首次发现！")
+        self.assertIn("全服首发现者", embed.description)
+        self.assertEqual(self.svc.first_discoveries(G)["long_rang_jun"]["announcement_status"], "sent")
+        await self.play(EGG_CANDS["long_rang_jun"](), user=B)       # 别人再抓：不公告
+        await self.play(EGG_CANDS["long_rang_jun"]())                # 自己再抓：不公告
+        await self.cog.flush_announcements(G)
+        self.assertEqual(len(self.ann.sent), 1)
+
+    async def test_normal_and_gift_never_announce(self):
+        await self.play(cand())
+        doll = self.svc.collection(G, A)[0]
+        g = await self.svc.create_gift(G, A, doll["id"], B)
+        await self.svc.respond_gift(G, g["id"], B, "accept")
+        await self.cog.flush_announcements(G)
+        self.assertEqual(self.ann.sent, [])
+
+    async def test_failure_keeps_doll_and_retries(self):
+        self.ann.fail = 1
+        await self.play(EGG_CANDS["hiss_warning"]())
+        self.assertEqual(len(self.svc.collection(G, A)), 1)
+        rec = self.svc.first_discoveries(G)["hiss_warning"]
+        self.assertEqual((rec["announcement_status"], rec["announcement_attempts"]), ("pending", 1))
+        await self.cog.flush_announcements(G)
+        self.assertEqual(len(self.ann.sent), 1)
+        self.assertEqual(self.svc.first_discoveries(G)["hiss_warning"]["user_id"], str(A))
+        self.assertEqual(self.svc.first_discoveries(G)["hiss_warning"]["announcement_status"], "sent")
+
+    async def test_restart_resends_pending(self):
+        self.svc.cfg["announce_channel_id"] = None                   # 先不配频道：公告留在待发
+        await self.play(EGG_CANDS["potato_thief"]())
+        self.assertEqual(self.ann.sent, [])
+        svc2 = self.new_service()
+        svc2.cfg = engine.prepare(copy.deepcopy(self.svc.cfg))
+        svc2.cfg["announce_channel_id"] = self.ANN
+        cog2 = ClawMachine(self.bot, svc2)
+        await cog2.flush_announcements(G)
+        self.assertEqual(len(self.ann.sent), 1)
+        self.assertEqual(svc2.first_discoveries(G)["potato_thief"]["announcement_status"], "sent")
+
+    async def test_ambiguous_send_is_not_duplicated(self):
+        await self.play(EGG_CANDS["snowball_grows"]())
+        self.assertEqual(len(self.ann.sent), 1)
+        async with self.svc.store.transaction(G) as doc:              # 模拟：发出去了但没来得及记成已发送
+            doc["first_discoveries"]["snowball_grows"]["announcement_status"] = "pending"
+        await self.cog.flush_announcements(G)
+        self.assertEqual(len(self.ann.sent), 1)
+        self.assertEqual(self.svc.first_discoveries(G)["snowball_grows"]["announcement_status"], "sent")
 
 
 if __name__ == "__main__":

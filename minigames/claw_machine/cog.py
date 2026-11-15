@@ -19,7 +19,8 @@ from . import protocol
 from . import renderer as ui
 from .service import DONE, PENDING, ClawError, ClawService
 from .store import StorageError
-from .views import CollectionView, DetailView, GiftPickView, aim_view, gift_view, pick_view, result_view
+from .views import (CollectionView, DetailView, EggBookView, GiftPickView, aim_view, gift_view, pick_view,
+                    result_view)
 
 log = logging.getLogger(__name__)
 
@@ -51,14 +52,17 @@ class ClawMachine(commands.Cog, name="ClawMachine"):
         self.bot = bot
         self.service = service or ClawService()
         self.posting: set[tuple[int, str]] = set()      # 正在发面板的局，防止并发重复发
+        self.announce_locks: dict[int, asyncio.Lock] = {}
         self._catch_up_task: asyncio.Task | None = None
 
     async def cog_load(self) -> None:
         self.expire_loop.start()
+        self.announce_loop.start()
         self._catch_up_task = asyncio.create_task(self.catch_up())
 
     async def cog_unload(self) -> None:
         self.expire_loop.cancel()
+        self.announce_loop.cancel()
         if self._catch_up_task:
             self._catch_up_task.cancel()
 
@@ -172,6 +176,8 @@ class ClawMachine(commands.Cog, name="ClawMachine"):
         log.info("万象娃娃机：guild=%s 第 %s 局 %s%s", gid, game_id, "成功" if doll else "失败",
                  f" {doll['id']}" if doll else "")
         await self._publish_result(interaction, game, doll, embed)
+        if game["result"].get("server_first"):
+            await self.flush_announcements(gid)
 
     async def _publish_result(self, interaction, game: dict, doll: dict | None, embed: discord.Embed) -> None:
         """在私密界面（/claw resume）里抓的：把公开面板也改成结果；面板不在了就在游戏频道发一条。"""
@@ -192,6 +198,83 @@ class ClawMachine(commands.Cog, name="ClawMachine"):
                 await ch.send(embed=embed, view=result_view(doll), allowed_mentions=NO_PING)
             except discord.HTTPException as e:
                 log.warning("万象娃娃机：公开结果发送失败 game=%s: %s", game["id"], e)
+
+    # ------------------------------------------------------------------ 全服首发现公告（outbox）
+
+    async def flush_announcements(self, guild_id: int) -> None:
+        """把待发的首发现公告发出去。首发现者早已在抓取事务里定好，这里只负责投递，失败了下次再试。
+
+        每次发之前先记一次尝试；重试时（尝试次数 > 0）先在公告频道里按页脚标记找一下，
+        找到说明上次其实发出去了（比如超时但 Discord 已收到），直接记成已发送，不重复发。
+        """
+        channel_id = self.service.cfg.get("announce_channel_id")
+        if not channel_id:
+            return
+        lock = self.announce_locks.setdefault(guild_id, asyncio.Lock())
+        async with lock:
+            try:
+                pending = self.service.pending_announcements(guild_id)
+            except StorageError:
+                return
+            if not pending:
+                return
+            ch = self.bot.get_channel(int(channel_id))
+            if ch is None:
+                try:
+                    ch = await self.bot.fetch_channel(int(channel_id))
+                except discord.HTTPException as e:
+                    log.warning("万象娃娃机：找不到公告频道 %s: %s", channel_id, e)
+                    return
+            for rec in pending:
+                egg_id = rec["egg_id"]
+                doll = self.service.doll(guild_id, rec["doll_id"])
+                if doll is None or not doll.get("egg"):
+                    await self.service.finish_announcement(guild_id, egg_id, None, "娃娃记录缺失")
+                    continue
+                try:
+                    if rec.get("announcement_attempts", 0) > 0:
+                        found = await self._already_announced(ch, egg_id)
+                        if found is not None:
+                            await self.service.finish_announcement(guild_id, egg_id, found)
+                            continue
+                    await self.service.begin_announcement(guild_id, egg_id)
+                    msg = await ch.send(embed=ui.announce_embed(rec, doll), allowed_mentions=NO_PING)
+                except discord.HTTPException as e:
+                    log.warning("万象娃娃机：首发现公告发送失败 egg=%s: %s", egg_id, e)
+                    try:
+                        await self.service.finish_announcement(guild_id, egg_id, None, str(e))
+                    except StorageError:
+                        pass
+                    continue
+                except StorageError:
+                    return
+                try:
+                    await self.service.finish_announcement(guild_id, egg_id, msg.id)
+                except StorageError:
+                    log.error("万象娃娃机：公告已发出但记录失败 egg=%s message=%s（重试时会按页脚找到它）",
+                              egg_id, msg.id)
+
+    async def _already_announced(self, channel, egg_id: str) -> int | None:
+        marker = ui.announce_footer(egg_id)
+        me = self.bot.user.id if getattr(self.bot, "user", None) else None
+        try:
+            async for m in channel.history(limit=self.service.cfg["announce_history_check"]):
+                if me is not None and m.author.id != me:
+                    continue
+                if any(e.footer and e.footer.text == marker for e in m.embeds):
+                    return m.id
+        except discord.HTTPException:
+            pass
+        return None
+
+    @tasks.loop(minutes=2)
+    async def announce_loop(self):
+        for gid in self.service.store.guild_ids_on_disk():
+            await self.flush_announcements(gid)
+
+    @announce_loop.before_loop
+    async def _announce_wait_ready(self):
+        await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------ 收藏柜
 
@@ -331,6 +414,50 @@ class ClawMachine(commands.Cog, name="ClawMachine"):
             return await say(interaction, MSG_STORAGE)
         await interaction.response.send_message(
             embed=ui.showcase_embed(who.id, dolls, self.service.cfg["max_showcase"]), allowed_mentions=NO_PING)
+
+    # ------------------------------------------------------------------ 名场面图鉴
+
+    async def show_egg_book(self, interaction: discord.Interaction, *, edit: bool = False) -> None:
+        try:
+            mine = self.service.discoveries(interaction.guild_id, interaction.user.id)
+        except StorageError:
+            return await say(interaction, MSG_STORAGE)
+        eggs = self.service.cfg["_eggs"]
+        kw = dict(embed=ui.egg_book_embed(interaction.user.id, eggs, mine), view=EggBookView(self, eggs, mine))
+        if edit:
+            await interaction.response.edit_message(**kw)
+        else:
+            await interaction.response.send_message(**kw, ephemeral=True)
+
+    async def show_egg_detail(self, interaction: discord.Interaction, egg_id: str) -> None:
+        mine = self.service.discoveries(interaction.guild_id, interaction.user.id)
+        egg = next((e for e in self.service.cfg["_eggs"] if e["id"] == egg_id), None)
+        if egg is None or egg_id not in mine:                  # 没亲手发现的不给看详情
+            return await say(interaction, "这一页还是 🔒 ？？？")
+        first = self.service.first_discoveries(interaction.guild_id).get(egg_id)
+        await interaction.response.edit_message(embed=ui.egg_detail_embed(egg, first, mine[egg_id]),
+                                                view=EggBookView(self, self.service.cfg["_eggs"], mine, back=True))
+
+    async def show_discoveries(self, interaction: discord.Interaction, *, edit: bool = False) -> None:
+        try:
+            firsts = self.service.first_discoveries(interaction.guild_id)
+        except StorageError:
+            return await say(interaction, MSG_STORAGE)
+        embed = ui.discoveries_embed(self.service.cfg["_eggs"], firsts)
+        if edit:
+            mine = self.service.discoveries(interaction.guild_id, interaction.user.id)
+            await interaction.response.edit_message(
+                embed=embed, view=EggBookView(self, self.service.cfg["_eggs"], mine, back=True))
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @claw.command(name="eggs", description="📖 云州名场面图鉴：看看你亲手发现了哪些隐藏彩蛋（仅自己可见）")
+    async def cmd_eggs(self, interaction: discord.Interaction):
+        await self.show_egg_book(interaction)
+
+    @claw.command(name="discoveries", description="🏆 全服首发现：每种隐藏彩蛋是谁最先抓到的（仅自己可见）")
+    async def cmd_discoveries(self, interaction: discord.Interaction):
+        await self.show_discoveries(interaction)
 
     @claw.command(name="stats", description="娃娃机战绩")
     @app_commands.describe(user="要看的人（默认自己）")

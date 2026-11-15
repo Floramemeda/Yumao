@@ -8,7 +8,7 @@ import discord
 TITLE = "🎟️ 南域游乐场 · 万象娃娃机"
 COLOR_GAME = discord.Color.from_rgb(255, 170, 200)
 COLOR_WIN = discord.Color.from_rgb(120, 200, 140)
-COLOR_EGG = discord.Color.gold()
+COLOR_EGG = discord.Color(0xD4AF37)        # 彩蛋专属金色
 COLOR_FAIL = discord.Color.dark_grey()
 COLOR_INFO = discord.Color.blurple()
 NUMS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
@@ -56,6 +56,15 @@ def aim_embed(cfg: dict, game: dict, idx: int, technique: str | None = None) -> 
     return embed
 
 
+def egg_emoji(egg: dict) -> str:
+    return egg.get("emoji") or "✨"
+
+
+def egg_blurb(egg: dict) -> str:
+    """图鉴里的一句话介绍：有典故用典故，没有就用揭晓台词。"""
+    return egg.get("story") or f"「{egg.get('reveal_text', '')}」"
+
+
 def doll_block(doll: dict) -> list[str]:
     lines = [f"🧸 **{doll['name']}**", "", "异常特征：", doll["names"]["quirk"]]
     if doll["egg"]:
@@ -73,6 +82,19 @@ def result_embed(cfg: dict, game: dict, doll: dict | None) -> discord.Embed:
         text = (f"{_m(game['user_id'])} 用 **{tech}** 抓 **{candidate_name(cand)}**……\n\n"
                 f"💨 {r['fail_text']}\n\n这局没抓到，下次再来！")
         embed = discord.Embed(title="😿 抓取失败", description=text, color=COLOR_FAIL)
+    elif doll["egg"]:
+        egg = doll["egg"]
+        lines = ["🎉 恭喜抓获隐藏彩蛋！", "", f"{egg_emoji(egg)} **{doll['name']}**", "",
+                 "异常特征：", doll["names"]["quirk"], "", f"🏆 隐藏称号：**{egg['title']}**"]
+        if egg.get("reveal_text"):
+            lines += ["", f"「{egg['reveal_text']}」"]
+        lines += ["", f"娃娃编号：`{doll['id']}`", f"抓获玩家：{_m(doll['original_owner_id'])}", "",
+                  "已自动收入收藏柜！"]
+        if r.get("server_first"):
+            lines.append("🎖️ **你是全服第一位发现这个名场面的人！**")
+        elif r.get("new_discovery"):
+            lines.append("📖 名场面图鉴新增一页！")
+        embed = discord.Embed(title="✨✨ 检测到异常共鸣！ ✨✨", description="\n".join(lines), color=COLOR_EGG)
     else:
         lines = [f"{_m(game['user_id'])} 用 **{tech}** 一爪命中！", ""] + doll_block(doll) + [
             "", f"娃娃编号：`{doll['id']}`",
@@ -85,6 +107,8 @@ def result_embed(cfg: dict, game: dict, doll: dict | None) -> discord.Embed:
 
 
 def detail_embed(doll: dict) -> discord.Embed:
+    if doll["egg"]:
+        return egg_card_embed(doll)
     lines = doll_block(doll) + [
         "", f"娃娃编号：`{doll['id']}`",
         f"原始抓取者：{_m(doll['original_owner_id'])}",
@@ -162,3 +186,91 @@ def gift_done_embed(gift: dict, doll: dict) -> discord.Embed:
             "expired": "这份赠礼邀请已过期"}.get(gift["status"], "赠礼已结束")
     return discord.Embed(title="🎁 赠礼邀请", color=COLOR_FAIL,
                          description=f"{text}，🧸 **{doll['name']}**（`{doll['id']}`）仍归 {_m(gift['from_id'])}。")
+
+
+# ---------------------------------------------------------------------- 彩蛋：收藏卡、图鉴、首发现
+
+FIELD_LABELS = (("subject", "主体"), ("mood", "姿态"), ("toy", "玩具"), ("quirk", "异常特征"))
+
+
+def egg_card_embed(doll: dict) -> discord.Embed:
+    egg = doll["egg"]
+    lines = [f"{egg_emoji(egg)} **{doll['name']}**", "", f"🏆 隐藏称号：**{egg['title']}**"]
+    if egg.get("story"):
+        lines.append(f"📜 {egg['story']}")
+    if egg.get("reveal_text"):
+        lines.append(f"「{egg['reveal_text']}」")
+    lines += [""] + [f"{label}：{doll['names'][f]}" for f, label in FIELD_LABELS] + [
+        "", f"娃娃编号：`{doll['id']}`",
+        f"原始抓获者：{_m(doll['original_owner_id'])}",
+        f"当前持有者：{_m(doll['current_owner_id'])}",
+        f"抓获于：<t:{_ts(doll['caught_at'])}:f>",
+    ]
+    if doll["is_showcased"]:
+        lines.append("🏆 正在展示")
+    if doll["pending_gift"]:
+        lines.append("🎁 有一份待对方确认的赠礼，暂时锁定")
+    return discord.Embed(title="✨ 云州名场面 · 收藏卡", description="\n".join(lines), color=COLOR_EGG)
+
+
+def egg_book_embed(user_id: int, eggs: list[dict], mine: dict) -> discord.Embed:
+    """个人图鉴：固定顺序六格；没发现的格子不露称号和条件。"""
+    lines = [f"{_m(user_id)} · 发现进度：**{sum(1 for e in eggs if e['id'] in mine)} / {len(eggs)}**", ""]
+    for e in eggs:
+        rec = mine.get(e["id"])
+        if rec:
+            lines += [f"✅ {egg_emoji(e)} **{e['title']}**", f"　{egg_blurb(e)}",
+                      f"　首次发现：<t:{_ts(rec['at'])}:D> · `{rec['doll_id']}`"]
+        else:
+            lines += ["🔒 **？？？**", "　尚未发现"]
+    embed = discord.Embed(title="📖 云州名场面图鉴", description="\n".join(lines),
+                          color=COLOR_EGG if mine else COLOR_INFO)
+    embed.set_footer(text="只有亲手抓到才算发现；收到的赠礼不算。")
+    return embed
+
+
+def egg_detail_embed(egg: dict, first: dict | None, mine: dict | None) -> discord.Embed:
+    lines = [f"{egg_emoji(egg)} **{egg['title']}**"]
+    if egg.get("story"):
+        lines.append(f"📜 {egg['story']}")
+    lines += [f"「{egg['reveal_text']}」", ""]
+    if first:
+        lines += [f"🎖️ 全服首发现者：{_m(first['user_id'])}",
+                  f"首次发现时间：<t:{_ts(first['discovered_at'])}:D>",
+                  f"首发现娃娃：`{first['doll_id']}`", ""]
+    lines.append("你的发现状态：" + ("已发现" if mine else "尚未发现"))
+    if mine:
+        lines.append(f"你的首次抓获：`{mine['doll_id']}`（<t:{_ts(mine['at'])}:D>）")
+    return discord.Embed(title=f"📖 云州名场面：{egg['title']}", description="\n".join(lines), color=COLOR_EGG)
+
+
+def discoveries_embed(eggs: list[dict], firsts: dict) -> discord.Embed:
+    """全服首发现榜：还没人发现的不露称号。"""
+    found = sum(1 for e in eggs if e["id"] in firsts)
+    lines = [f"全服已揭晓：**{found} / {len(eggs)}**", ""]
+    for e in eggs:
+        rec = firsts.get(e["id"])
+        if rec:
+            lines.append(f"{egg_emoji(e)} **{e['title']}** —— {_m(rec['user_id'])} · "
+                         f"<t:{_ts(rec['discovered_at'])}:D> · `{rec['doll_id']}`")
+        else:
+            lines.append("🔒 **？？？** —— 尚无人发现")
+    return discord.Embed(title="🏆 云州奇闻录 · 全服首发现", description="\n".join(lines),
+                         color=COLOR_EGG if found else COLOR_INFO)
+
+
+def announce_footer(egg_id: str) -> str:
+    """公告去重标记：重试前按它在频道里找有没有已经发出去的那条。"""
+    return f"云州奇闻录 · 首发现 · {egg_id}"
+
+
+def announce_embed(rec: dict, doll: dict) -> discord.Embed:
+    egg = doll["egg"]
+    lines = ["✨ 一项隐藏名场面被揭晓！", "", f"{egg_emoji(egg)} **{egg['title']}**", "",
+             f"{_m(rec['user_id'])} 成功抓获了：", "", f"**{doll['name']}**", "", "异常特征：", doll["names"]["quirk"]]
+    if egg.get("reveal_text"):
+        lines += ["", f"「{egg['reveal_text']}」"]
+    lines += ["", f"🎖️ 全服首发现者：{_m(rec['user_id'])}", f"🧸 娃娃编号：`{rec['doll_id']}`"]
+    embed = discord.Embed(title="🏆 云州奇闻录 · 首次发现！", description="\n".join(lines), color=COLOR_EGG)
+    embed.set_footer(text=announce_footer(rec["egg_id"]))
+    return embed

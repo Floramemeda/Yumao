@@ -43,6 +43,9 @@ def prepare(cfg: dict) -> dict:
 
     eggs, seen = [], set()
     for rule in cfg.get("easter_eggs", []):
+        for key in ("title", "reveal_text", "emoji"):
+            if not rule.get(key):
+                raise ConfigError(f"彩蛋 {rule.get('id')} 缺少 {key}")
         if rule["id"] in seen:
             raise ConfigError(f"彩蛋 id 重复：{rule['id']}")
         seen.add(rule["id"])
@@ -90,3 +93,7 @@ def match_egg(cfg: dict, c: dict) -> dict | None:
     if not hits:
         return None
     return max(hits, key=lambda r: (len(r["ids"]), r["priority"]))
+
+
+def egg_rule(cfg: dict, egg_id: str) -> dict | None:
+    return next((r for r in cfg["_eggs"] if r["id"] == egg_id), None)

@@ -129,13 +129,29 @@ class ClawService:
                 key = engine.combo_key(cand)
                 if key not in st["combos"]:
                     st["combos"].append(key)
-                if doll["egg"] and doll["egg"]["id"] not in st["eggs"]:
-                    st["eggs"].append(doll["egg"]["id"])
+                if doll["egg"]:
+                    result.update(self._record_discovery(doc, doll, user_id, now))
             else:
                 result["fail_text"] = self.rng.choice(self.cfg["fail_texts"])
             game["result"] = result
             game["status"] = DONE
             return game, doll, False
+
+    @staticmethod
+    def _record_discovery(doc: dict, doll: dict, user_id: int, now: str) -> dict:
+        """与写入娃娃在同一事务里：个人首次发现（每人每种一条）+ 全服首发现（每种一条，先落盘者得）。"""
+        eid, flags = doll["egg"]["id"], {}
+        mine = doc["egg_discoveries"].setdefault(str(user_id), {})
+        if eid not in mine:
+            mine[eid] = {"doll_id": doll["id"], "at": now}
+            flags["new_discovery"] = True
+        if eid not in doc["first_discoveries"]:
+            doc["first_discoveries"][eid] = {
+                "egg_id": eid, "guild_id": doc["guild_id"], "user_id": str(user_id), "doll_id": doll["id"],
+                "discovered_at": now, "announcement_status": "pending",     # pending / sent / failed / skipped
+                "announcement_message_id": None, "announcement_attempts": 0, "announcement_error": None}
+            flags["server_first"] = True
+        return flags
 
     def _new_doll(self, doc: dict, game: dict, cand: dict, user_id: int, now: str) -> dict:
         doc["seq"]["doll"] += 1
@@ -144,7 +160,8 @@ class ClawService:
         doll = {
             "id": did, **{f: cand[f] for f in engine.FIELDS}, "names": dict(cand["names"]),
             "name": engine.doll_name(cand["names"]),
-            "egg": {"id": egg["id"], "title": egg["title"], "story": egg.get("story", "")} if egg else None,
+            "egg": {"id": egg["id"], "title": egg["title"], "story": egg.get("story", ""),
+                    "reveal_text": egg["reveal_text"], "emoji": egg["emoji"]} if egg else None,
             "original_owner_id": str(user_id), "current_owner_id": str(user_id),
             "caught_at": now, "acquired_at": now, "is_showcased": False,
             "source_game_id": game["id"], "pending_gift": None, "history": [],
@@ -208,10 +225,44 @@ class ClawService:
             "holding": len(mine),
             "holding_caught": sum(1 for d in mine if d["original_owner_id"] == str(user_id)),
             "holding_gifted": sum(1 for d in mine if d["original_owner_id"] != str(user_id)),
-            "unique_combos": len(st["combos"]), "eggs": len(st["eggs"]),
+            "unique_combos": len(st["combos"]), "eggs": len(doc["egg_discoveries"].get(str(user_id), {})),
             "eggs_total": len(self.cfg["_eggs"]),
             "gifts_sent": st["gifts_sent"], "gifts_received": st["gifts_received"],
         }
+
+    # ------------------------------------------------------------------ 彩蛋图鉴与首发现
+
+    def discoveries(self, guild_id: int, user_id: int) -> dict:
+        """玩家亲手发现过的彩蛋：彩蛋 id -> {doll_id, at}。收到的赠礼不算。"""
+        return self.store.load(guild_id)["egg_discoveries"].get(str(user_id), {})
+
+    def first_discoveries(self, guild_id: int) -> dict:
+        return self.store.load(guild_id)["first_discoveries"]
+
+    def pending_announcements(self, guild_id: int) -> list[dict]:
+        firsts = self.first_discoveries(guild_id).values()
+        return sorted((r for r in firsts if r["announcement_status"] == "pending"), key=lambda r: r["discovered_at"])
+
+    async def begin_announcement(self, guild_id: int, egg_id: str) -> dict:
+        """发之前先记一次尝试：之后再重试时，attempts > 0 就先去频道里查是不是其实已经发出去了。"""
+        async with self.store.transaction(guild_id) as doc:
+            rec = doc["first_discoveries"][egg_id]
+            rec["announcement_attempts"] = rec.get("announcement_attempts", 0) + 1
+            return dict(rec)
+
+    async def finish_announcement(self, guild_id: int, egg_id: str, message_id: int | None,
+                                  error: str | None = None) -> None:
+        async with self.store.transaction(guild_id) as doc:
+            rec = doc["first_discoveries"][egg_id]
+            if rec["announcement_status"] != "pending":
+                return
+            if message_id is not None:
+                rec["announcement_status"], rec["announcement_message_id"] = "sent", str(message_id)
+                rec["announcement_error"] = None
+            else:
+                rec["announcement_error"] = (error or "")[:200]
+                if rec["announcement_attempts"] >= self.cfg["announce_max_attempts"]:
+                    rec["announcement_status"] = "failed"
 
     # ------------------------------------------------------------------ 赠送
 

@@ -31,7 +31,24 @@ def empty_doc(guild_id: int) -> dict:
         "dolls": {},       # 娃娃编号 -> 娃娃
         "gifts": {},       # 赠礼 id -> 赠礼
         "stats": {},       # 玩家 id -> 统计
+        # 三个不同的概念：娃娃身上的 egg（抓到了什么）、egg_discoveries（谁亲手发现过哪种）、
+        # first_discoveries（每种彩蛋的全服首发现者，一种只有一条，写入后永不改）
+        "egg_discoveries": {},    # 玩家 id -> 彩蛋 id -> {doll_id, at}
+        "first_discoveries": {},  # 彩蛋 id -> {user_id, doll_id, discovered_at, announcement_*}
     }
+
+
+def backfill_discoveries(doc: dict) -> None:
+    """旧存档没有发现记录时，按娃娃的原始抓获者和抓获时间补出来。补出来的首发现不再补发公告。"""
+    mine, first = doc["egg_discoveries"], doc["first_discoveries"]
+    for d in sorted(doc["dolls"].values(), key=lambda d: (d["caught_at"], d["id"])):
+        if not d.get("egg"):
+            continue
+        eid, uid = d["egg"]["id"], d["original_owner_id"]
+        mine.setdefault(uid, {}).setdefault(eid, {"doll_id": d["id"], "at": d["caught_at"]})
+        first.setdefault(eid, {"egg_id": eid, "guild_id": doc["guild_id"], "user_id": uid, "doll_id": d["id"],
+                               "discovered_at": d["caught_at"], "announcement_status": "skipped",
+                               "announcement_message_id": None, "announcement_attempts": 0})
 
 
 class ClawStore:
@@ -64,8 +81,11 @@ class ClawStore:
                     doc = json.load(f)
                 if doc.get("guild_id") != str(guild_id):
                     raise ValueError("guild_id 不匹配")
+                legacy = "egg_discoveries" not in doc
                 for key, default in empty_doc(guild_id).items():
                     doc.setdefault(key, default)
+                if legacy:
+                    backfill_discoveries(doc)
             except (OSError, ValueError) as e:
                 log.error("万象娃娃机：guild=%s 存档无法读取（%s），已停止该服读写，请人工检查 %s",
                           guild_id, type(e).__name__, p)
