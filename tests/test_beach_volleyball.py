@@ -318,6 +318,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.bot = NS(get_channel=lambda cid: self.channel if cid == CH else None, wait_until_ready=ready)
         self.cfg = cfg_with(1.1)
         self.cfg["state_file"] = str(Path(self.tmp.name) / "state.json")
+        self.cfg["allowed_channel_ids"], self.cfg["allowed_category_ids"] = [], []   # 线上限定频道，测试里不限
         self.svc = self.new_service()
 
     def new_service(self):

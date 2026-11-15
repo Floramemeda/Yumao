@@ -16,7 +16,7 @@
   "friendly_fire": {"chance": 0.25, "parts": ["chest", "butt"]},
   "excitement_steps": [25, 50, 100],
 
-  "allowed_channel_ids": [],
+  "allowed_channel_ids": [1571463265379164291],
   "allowed_category_ids": [],
 
   "state_file": "data/beach_volleyball_state.json"
