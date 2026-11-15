@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import discord
 
 from minigames.trick_or_treat import renderer as ui
-from minigames.trick_or_treat.cog import TrickOrTreat
+from minigames.trick_or_treat.cog import TrickOrTreat, is_manager
 from minigames.trick_or_treat.constants import ACTIVE, BODY_PARTS, CLOSED, FOUND, JOINED, PART_IDS
 from minigames.trick_or_treat.service import TotError, TotService, load_config, matched_ids, stats
 from minigames.trick_or_treat.store import StorageError, TotStore
@@ -412,6 +412,31 @@ class OutboxTests(Base):
         await self.cog.flush(G)
         self.assertEqual(self.ch.sent[-1].title, "🎃 万圣夜寻糖 · 最终结果")
         self.assertIn(f"糖果猎人：<@{A}>（1 颗）", self.ch.sent[-1].description)
+
+
+class ManagerTest(unittest.TestCase):
+    CFG = {"guilds": {str(G): {"manager_user_ids": [A], "manager_role_ids": [77]}}}
+
+    @staticmethod
+    def it(uid, guild=G, manage=False, roles=()):
+        return NS(guild_id=guild, permissions=discord.Permissions(manage_guild=manage),
+                  user=NS(id=uid, roles=[NS(id=r) for r in roles]))
+
+    def test_manage_guild_always(self):
+        self.assertTrue(is_manager(self.it(B, manage=True), self.CFG))
+        self.assertTrue(is_manager(self.it(B, manage=True)))
+
+    def test_listed_user_and_role(self):
+        self.assertTrue(is_manager(self.it(A), self.CFG))
+        self.assertTrue(is_manager(self.it(C, roles=[77]), self.CFG))
+
+    def test_others_and_other_guild(self):
+        self.assertFalse(is_manager(self.it(B, roles=[5]), self.CFG))
+        self.assertFalse(is_manager(self.it(A, guild=G2), self.CFG))
+
+    def test_real_config_lists_player(self):
+        g = load_config()["guilds"]["1541312608114581576"]
+        self.assertIn(1154080023444213781, g["manager_user_ids"])
 
 
 if __name__ == "__main__":

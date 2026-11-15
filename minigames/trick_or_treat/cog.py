@@ -24,9 +24,16 @@ NO_PING = discord.AllowedMentions.none()
 PART_CHOICES = [app_commands.Choice(name=text, value=pid) for pid, text in BODY_PARTS]
 
 
-def is_manager(interaction: discord.Interaction) -> bool:
+def is_manager(interaction: discord.Interaction, cfg: dict | None = None) -> bool:
+    """「管理服务器」权限，或写在 config.json guilds.<服务器>.manager_user_ids / manager_role_ids 里的活动管理员。"""
     p = interaction.permissions
-    return bool(p.administrator or p.manage_guild)
+    if p.administrator or p.manage_guild:
+        return True
+    g = (cfg or {}).get("guilds", {}).get(str(interaction.guild_id), {})
+    if interaction.user.id in {int(u) for u in g.get("manager_user_ids", [])}:
+        return True
+    roles = {r.id for r in getattr(interaction.user, "roles", [])}
+    return bool(roles & {int(r) for r in g.get("manager_role_ids", [])})
 
 
 async def say(interaction: discord.Interaction, text: str | None = None, **kw) -> None:
@@ -66,8 +73,8 @@ def event_channels(event: dict) -> set[int]:
 
 class TrickOrTreat(commands.Cog, name="TrickOrTreat"):
     tot = app_commands.Group(name="trickortreat", description="🎃 不给糖就捣蛋 · 万圣夜寻糖", guild_only=True)
-    admin = app_commands.Group(name="trickortreat_admin", description="（管理）不给糖就捣蛋活动管理",
-                               guild_only=True, default_permissions=discord.Permissions(manage_guild=True))
+    # 不设 default_permissions：配置里的活动管理员没有「管理服务器」也要看得到这组指令，权限由 _guard 把关
+    admin = app_commands.Group(name="trickortreat_admin", description="（管理）不给糖就捣蛋活动管理", guild_only=True)
 
     def __init__(self, bot: commands.Bot, service: TotService | None = None):
         self.bot = bot
@@ -334,14 +341,14 @@ class TrickOrTreat(commands.Cog, name="TrickOrTreat"):
     # ------------------------------------------------------------------ 管理指令
 
     async def _guard(self, interaction: discord.Interaction) -> bool:
-        if is_manager(interaction):
+        if is_manager(interaction, self.service.cfg):
             return True
-        await say(interaction, "只有拥有「管理服务器」权限的成员可以管理活动。")
+        await say(interaction, "只有活动管理员或拥有「管理服务器」权限的成员可以管理活动。")
         return False
 
-    @admin.command(name="setup", description="设置报名入口频道和公开播报频道（可以相同）")
-    async def adm_setup(self, interaction: discord.Interaction, entry_channel: discord.TextChannel,
-                        announce_channel: discord.TextChannel):
+    @admin.command(name="setup", description="设置报名入口频道和公开播报频道（可以相同，也可以是子区）")
+    async def adm_setup(self, interaction: discord.Interaction, entry_channel: discord.TextChannel | discord.Thread,
+                        announce_channel: discord.TextChannel | discord.Thread):
         if not await self._guard(interaction):
             return
         try:

@@ -3,5 +3,12 @@
   "outbox_retry_seconds": 60,
   "outbox_max_retries": 20,
   "history_check_limit": 50,
-  "data_dir": "data/trick_or_treat"
+  "data_dir": "data/trick_or_treat",
+
+  "guilds": {
+    "1541312608114581576": {
+      "manager_user_ids": [1154080023444213781],
+      "manager_role_ids": []
+    }
+  }
 }
