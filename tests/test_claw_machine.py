@@ -72,6 +72,24 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(protocol.parse_text("没有标记\nVERSION=1\nUSER_ID=111111111111111111\nEVENT_ID=x"))
         self.assertIsNone(protocol.parse_text(ticket_text(user="abc")))
 
+    def test_new_spoiler_format(self):
+        text = (f"🎟️ 南域游乐场 · 万象娃娃机\n\n<@{A}> 使用了一张游乐园门票！\n\n"
+                "听说这台娃娃机什么都抓得出来。\n至于抓出来的东西正不正常，老板可不保证。\n\n"
+                "-# ||[YUNZHOU_CLAW_START]||\n-# ||EVENT_ID=7f3a9c2e41b8||")
+        t = protocol.parse_text(text)
+        self.assertEqual((t.user_id, t.event_id), (A, "7f3a9c2e41b8"))
+        self.assertEqual(protocol.parse_text(f"<@!{B}> 用了票\n-# ||[YUNZHOU_CLAW_START]||\n-# ||EVENT_ID=x1||").user_id, B)
+
+    def test_new_format_rejects(self):
+        self.assertIsNone(protocol.parse_text("-# ||[YUNZHOU_CLAW_START]||\n-# ||EVENT_ID=x1||"))      # 没有玩家
+        self.assertIsNone(protocol.parse_text(f"<@{A}>\n-# ||[YUNZHOU_CLAW_START]||\n-# ||VERSION=2||\n-# ||EVENT_ID=x1||"))
+        self.assertIsNone(protocol.parse_text(f"<@{A}>\n-# ||[YUNZHOU_CLAW_START]||"))                  # 没有事件
+        self.assertIsNone(protocol.parse_text(f"-# ||[YUNZHOU_CLAW_START]||\n<@{A}>\n-# ||EVENT_ID=x1||"))  # @ 在标记后不算
+
+    def test_explicit_user_id_wins(self):
+        text = f"<@{B}>\n[YUNZHOU_CLAW_START]\nUSER_ID={A}\nEVENT_ID=x2"
+        self.assertEqual(protocol.parse_text(text).user_id, A)
+
     def test_embed_description(self):
         msg = NS(content="", embeds=[NS(description=ticket_text(event="E-9"))])
         self.assertEqual(protocol.parse_message(msg).event_id, "E-9")
