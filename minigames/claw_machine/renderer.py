@@ -61,16 +61,14 @@ def egg_emoji(egg: dict) -> str:
 
 
 def egg_blurb(egg: dict) -> str:
-    """图鉴里的一句话介绍：有典故用典故，没有就用揭晓台词。"""
-    return egg.get("story") or f"「{egg.get('reveal_text', '')}」"
+    """图鉴里的一句话介绍：用揭晓台词（典故大家都知道，不再显示）。"""
+    return f"「{egg.get('reveal_text', '')}」"
 
 
 def doll_block(doll: dict) -> list[str]:
     lines = [f"🧸 **{doll['name']}**", "", "异常特征：", doll["names"]["quirk"]]
     if doll["egg"]:
         lines += ["", f"✨ 隐藏彩蛋：**{doll['egg']['title']}**"]
-        if doll["egg"].get("story"):
-            lines.append(f"-# {doll['egg']['story']}")
     return lines
 
 
@@ -196,8 +194,6 @@ FIELD_LABELS = (("subject", "主体"), ("mood", "姿态"), ("toy", "玩具"), ("
 def egg_card_embed(doll: dict) -> discord.Embed:
     egg = doll["egg"]
     lines = [f"{egg_emoji(egg)} **{doll['name']}**", "", f"🏆 隐藏称号：**{egg['title']}**"]
-    if egg.get("story"):
-        lines.append(f"📜 {egg['story']}")
     if egg.get("reveal_text"):
         lines.append(f"「{egg['reveal_text']}」")
     lines += [""] + [f"{label}：{doll['names'][f]}" for f, label in FIELD_LABELS] + [
@@ -214,7 +210,7 @@ def egg_card_embed(doll: dict) -> discord.Embed:
 
 
 def egg_book_embed(user_id: int, eggs: list[dict], mine: dict) -> discord.Embed:
-    """个人图鉴：固定顺序六格；没发现的格子不露称号和条件。"""
+    """个人图鉴：按配置顺序每种一格；没发现的格子不露称号和条件。"""
     lines = [f"{_m(user_id)} · 发现进度：**{sum(1 for e in eggs if e['id'] in mine)} / {len(eggs)}**", ""]
     for e in eggs:
         rec = mine.get(e["id"])
@@ -231,8 +227,6 @@ def egg_book_embed(user_id: int, eggs: list[dict], mine: dict) -> discord.Embed:
 
 def egg_detail_embed(egg: dict, first: dict | None, mine: dict | None) -> discord.Embed:
     lines = [f"{egg_emoji(egg)} **{egg['title']}**"]
-    if egg.get("story"):
-        lines.append(f"📜 {egg['story']}")
     lines += [f"「{egg['reveal_text']}」", ""]
     if first:
         lines += [f"🎖️ 全服首发现者：{_m(first['user_id'])}",

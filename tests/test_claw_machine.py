@@ -109,7 +109,7 @@ class EngineTests(unittest.TestCase):
             self.assertIn(c["position"], CFG["positions"])
 
     def test_pool_sizes(self):
-        self.assertEqual([len(CFG[k]) for k in ("subjects", "moods", "toy_types", "quirks")], [20, 30, 15, 31])
+        self.assertEqual([len(CFG[k]) for k in ("subjects", "moods", "toy_types", "quirks")], [25, 32, 15, 37])
 
     def test_name_format(self):
         c = cand("青楼老板娘", "偷薯饼的", "毛绒团子", "一捏就大喊「薯饼是我的！」")
@@ -139,7 +139,7 @@ class EngineTests(unittest.TestCase):
                 for g in CFG["grips"] for p in CFG["positions"]}
         self.assertEqual(set(best.values()), {"front", "side", "bottom"})
 
-    def test_all_six_eggs(self):
+    def test_all_eggs(self):
         cases = {
             "eternal_resident": cand("五舅", "秘境外打地铺的", "毛绒睡袋", "口袋里藏着一张假藏宝图"),
             "potato_thief": cand("青楼老板娘", "偷薯饼的", "八音盒", "突然长出了九条尾巴"),
@@ -147,9 +147,18 @@ class EngineTests(unittest.TestCase):
             "long_rang_jun": cand("女帝", "一脸智慧的", "钥匙挂件", "总把龙骧军念成龙嚷军"),
             "snowball_grows": cand("雪球", "滚雪球的"),
             "hiss_warning": cand("玉猫", "正在哈气的"),
+            "void_crash": cand("五舅", "秘境外打地铺的", "八音盒", "破空到南域重伤倒地"),
+            "squeeze_master": cand("子妤", "修煤气的", "八音盒", "对你说「今天榨主人」"),
+            "ergou_private": cand("二狗", "正在自慰的"),
         }
+        self.assertEqual(set(cases), {e["id"] for e in CFG["_eggs"]})
         for egg_id, c in cases.items():
             self.assertEqual(engine.match_egg(CFG, c)["id"], egg_id)
+
+    def test_void_crash_beats_eternal_resident(self):
+        # 两条都是三词条，同时命中时按 priority：地铺破空优先
+        c = cand("五舅", "秘境外打地铺的", "毛绒睡袋", "破空到南域重伤倒地")
+        self.assertEqual(engine.match_egg(CFG, c)["id"], "void_crash")
 
     def test_near_misses_do_not_trigger(self):
         misses = [
@@ -600,6 +609,9 @@ EGG_CANDS = {
     "long_rang_jun": lambda: cand("女帝", "一脸智慧的", "尖叫小黄鸭", "总把龙骧军念成龙嚷军"),
     "snowball_grows": lambda: cand("雪球", "滚雪球的"),
     "hiss_warning": lambda: cand("玉猫", "正在哈气的"),
+    "void_crash": lambda: cand("五舅", "秘境外打地铺的", "八音盒", "破空到南域重伤倒地"),
+    "squeeze_master": lambda: cand("子妤", "偷偷傻笑的", "八音盒", "对你说「今天榨主人」"),
+    "ergou_private": lambda: cand("二狗", "正在自慰的"),
 }
 
 
@@ -641,9 +653,10 @@ class EggTests(Base):
         doll = await self.win(EGG_CANDS["potato_thief"]())
         card = ui.detail_embed(doll)
         self.assertEqual(card.color, ui.COLOR_EGG)
-        for text in ("✨", "薯饼大盗", "老板娘经常偷吃", "青楼老板娘", "偷薯饼的", "八音盒",
+        for text in ("✨", "薯饼大盗", "偷薯饼的居然是老板娘本人", "青楼老板娘", "偷薯饼的", "八音盒",
                      doll["names"]["quirk"], doll["id"], f"原始抓获者：<@{A}>"):
             self.assertIn(text, card.title + card.description)
+        self.assertNotIn("📜", card.description)                # 典故不再显示
 
     async def test_personal_discovery_once(self):
         d1 = await self.win(EGG_CANDS["hiss_warning"]())
@@ -697,9 +710,9 @@ class EggTests(Base):
         await self.win(EGG_CANDS["debt_no_worry"]())
         mine = self.svc.discoveries(G, A)
         text = ui.egg_book_embed(A, CFG["_eggs"], mine).description
-        self.assertIn("1 / 6", text)
+        self.assertIn(f"1 / {len(CFG['_eggs'])}", text)
         self.assertIn("债多不压身", text)
-        self.assertEqual(text.count("🔒 **？？？**"), 5)
+        self.assertEqual(text.count("🔒 **？？？**"), len(CFG['_eggs']) - 1)
         for e in CFG["_eggs"]:
             if e["id"] != "debt_no_worry":
                 self.assertNotIn(e["title"], text)

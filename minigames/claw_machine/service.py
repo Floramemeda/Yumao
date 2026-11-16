@@ -160,7 +160,7 @@ class ClawService:
         doll = {
             "id": did, **{f: cand[f] for f in engine.FIELDS}, "names": dict(cand["names"]),
             "name": engine.doll_name(cand["names"]),
-            "egg": {"id": egg["id"], "title": egg["title"], "story": egg.get("story", ""),
+            "egg": {"id": egg["id"], "title": egg["title"],
                     "reveal_text": egg["reveal_text"], "emoji": egg["emoji"]} if egg else None,
             "original_owner_id": str(user_id), "current_owner_id": str(user_id),
             "caught_at": now, "acquired_at": now, "is_showcased": False,
