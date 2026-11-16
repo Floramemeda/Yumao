@@ -29,7 +29,7 @@ def candidate_name(cand: dict) -> str:
 
 
 def pick_embed(cfg: dict, game: dict, others: int = 0) -> discord.Embed:
-    lines = [f"{_m(game['user_id'])} 投进了一张门票，机器里晃着三只娃娃。\n先观察，再选一只下爪（每局只能抓一次）：", ""]
+    lines = [f"{_m(game['user_id'])} 投进了一张抽奖券，机器里晃着三只娃娃。\n先观察，再选一只下爪（每局只能抓一次）：", ""]
     for i, cand in enumerate(game["candidates"]):
         lines += [f"{NUMS[i]} **{candidate_name(cand)}**", clue_lines(cfg, cand), ""]
     if others:

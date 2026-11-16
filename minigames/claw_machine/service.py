@@ -85,7 +85,7 @@ class ClawService:
         if game is None:
             raise ClawError("找不到这局娃娃机。")
         if game["user_id"] != str(user_id):
-            raise ClawError("这不是你的娃娃机哦，用自己的门票来玩吧～")
+            raise ClawError("这不是你的娃娃机哦，用自己的抽奖券来玩吧～")
         return game
 
     def pending_games(self, guild_id: int, user_id: int) -> list[dict]:
@@ -109,7 +109,7 @@ class ClawService:
             if game is None:
                 raise ClawError("找不到这局娃娃机。")
             if game["user_id"] != str(user_id):
-                raise ClawError("这不是你的娃娃机哦，用自己的门票来玩吧～")
+                raise ClawError("这不是你的娃娃机哦，用自己的抽奖券来玩吧～")
             if game["result"] is not None:
                 did = game["result"].get("doll_id")
                 return game, doc["dolls"].get(did) if did else None, True

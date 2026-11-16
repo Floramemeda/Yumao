@@ -24,7 +24,7 @@ from .views import (CollectionView, DetailView, EggBookView, GiftPickView, aim_v
 
 log = logging.getLogger(__name__)
 
-MSG_STORAGE = "娃娃机的存档暂时出了问题，请联系管理员（你的门票机会不会丢）。"
+MSG_STORAGE = "娃娃机的存档暂时出了问题，请联系管理员（你的抽奖券机会不会丢）。"
 NO_PING = discord.AllowedMentions.none()
 
 
@@ -387,14 +387,14 @@ class ClawMachine(commands.Cog, name="ClawMachine"):
 
     # ------------------------------------------------------------------ 指令
 
-    @claw.command(name="resume", description="继续还没玩完的娃娃机（门票机会不会丢）")
+    @claw.command(name="resume", description="继续还没玩完的娃娃机（抽奖券机会不会丢）")
     async def cmd_resume(self, interaction: discord.Interaction):
         try:
             games = self.service.pending_games(interaction.guild_id, interaction.user.id)
         except StorageError:
             return await say(interaction, MSG_STORAGE)
         if not games:
-            return await say(interaction, "你没有待玩的娃娃机。用游乐园门票就能开一局～")
+            return await say(interaction, "你没有待玩的娃娃机。用好运无限抽奖券就能开一局～")
         game = games[0]
         await interaction.response.send_message(embed=ui.pick_embed(self.service.cfg, game, len(games) - 1),
                                                 view=pick_view(game), ephemeral=True)

@@ -22,7 +22,7 @@ CFG = engine.load_config()
 
 
 def ticket_text(user=A, event="EV1", version="1"):
-    return (f"🎟️ 南域游乐场 · 万象娃娃机\n\n<@{user}> 使用了一张游乐园门票！\n\n"
+    return (f"🎟️ 南域游乐场 · 万象娃娃机\n\n<@{user}> 使用了一张好运无限抽奖券！\n\n"
             f"[YUNZHOU_CLAW_START]\nVERSION={version}\nUSER_ID={user}\nEVENT_ID={event}")
 
 
@@ -73,7 +73,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(protocol.parse_text(ticket_text(user="abc")))
 
     def test_new_spoiler_format(self):
-        text = (f"🎟️ 南域游乐场 · 万象娃娃机\n\n<@{A}> 使用了一张游乐园门票！\n\n"
+        text = (f"🎟️ 南域游乐场 · 万象娃娃机\n\n<@{A}> 使用了一张好运无限抽奖券！\n\n"
                 "听说这台娃娃机什么都抓得出来。\n至于抓出来的东西正不正常，老板可不保证。\n\n"
                 "-# ||[YUNZHOU_CLAW_START]||\n-# ||EVENT_ID=7f3a9c2e41b8||")
         t = protocol.parse_text(text)
