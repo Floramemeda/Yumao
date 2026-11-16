@@ -82,17 +82,17 @@
     "bottom": {"name": "托底搬运", "emoji": "🤲", "hint": "爪子从底下兜住整只娃娃，表面再滑也能托起来。"}
   },
   "base_rates": {
-    "flat":       {"front": 78, "side": 55, "bottom": 65},
-    "protrusion": {"front": 58, "side": 82, "bottom": 62},
-    "smooth":     {"front": 48, "side": 60, "bottom": 76}
+    "flat":       {"front": 61, "side": 44, "bottom": 51},
+    "protrusion": {"front": 46, "side": 64, "bottom": 49},
+    "smooth":     {"front": 39, "side": 48, "bottom": 60}
   },
   "position_modifiers": {
-    "center": {"front": 8, "side": -5, "bottom": 0},
-    "edge":   {"front": -8, "side": 8, "bottom": 8},
-    "pile":   {"front": 8, "side": -25, "bottom": -18}
+    "center": {"front": 6, "side": -4, "bottom": 0},
+    "edge":   {"front": -6, "side": 6, "bottom": 6},
+    "pile":   {"front": 6, "side": -19, "bottom": -14}
   },
-  "rate_min": 40,
-  "rate_max": 90,
+  "rate_min": 25,
+  "rate_max": 70,
 
   "fail_texts": [
     "夹爪精准地抓住了空气。",

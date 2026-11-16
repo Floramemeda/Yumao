@@ -116,10 +116,10 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(engine.doll_name(c["names"]), "偷薯饼的青楼老板娘毛绒团子")
 
     def test_chance_table(self):
-        expect = {("flat", "center", "front"): 86, ("flat", "center", "side"): 50, ("flat", "center", "bottom"): 65,
-                  ("protrusion", "edge", "side"): 90, ("protrusion", "pile", "side"): 57,
-                  ("smooth", "edge", "bottom"): 84, ("smooth", "pile", "front"): 56,
-                  ("smooth", "pile", "side"): 40, ("flat", "pile", "side"): 40}
+        expect = {("flat", "center", "front"): 67, ("flat", "center", "side"): 40, ("flat", "center", "bottom"): 51,
+                  ("protrusion", "edge", "side"): 70, ("protrusion", "pile", "side"): 45,
+                  ("smooth", "edge", "bottom"): 66, ("smooth", "pile", "front"): 45,
+                  ("smooth", "pile", "side"): 29, ("flat", "pile", "side"): 25}
         for (g, p, t), v in expect.items():
             self.assertEqual(engine.chance(CFG, g, p, t), v, (g, p, t))
 
@@ -127,9 +127,12 @@ class EngineTests(unittest.TestCase):
         for g in CFG["grips"]:
             for p in CFG["positions"]:
                 for t in CFG["techniques"]:
-                    self.assertTrue(40 <= engine.chance(CFG, g, p, t) <= 90)
-        self.assertEqual(engine.chance(CFG, "protrusion", "edge", "side"), 90)   # 82+8=90 上限
-        self.assertEqual(engine.chance(CFG, "smooth", "pile", "side"), 40)       # 60-25=35 → 40
+                    self.assertTrue(25 <= engine.chance(CFG, g, p, t) <= 70)
+        self.assertEqual(engine.chance(CFG, "protrusion", "edge", "side"), 70)   # 64+6=70 猜对的最高值
+        self.assertEqual(engine.chance(CFG, "flat", "pile", "side"), 25)         # 44-19=25 完全猜错的最低值
+        best = [max(engine.chance(CFG, g, p, t) for t in CFG["techniques"])
+                for g in CFG["grips"] for p in CFG["positions"]]
+        self.assertEqual(max(best), 70)
 
     def test_best_technique_varies(self):
         best = {(g, p): max(CFG["techniques"], key=lambda t: engine.chance(CFG, g, p, t))
@@ -260,7 +263,7 @@ class ServiceTests(Base):
 
     async def test_failure(self):
         gid = await self.game_with(cand(grip="smooth", position="pile"))
-        self.rng.roll = 40                                    # 成功率 40%：roll 40 不成功
+        self.rng.roll = 29                                    # 成功率 29%：roll 29 不成功
         game, doll, replay = await self.svc.grab(G, gid, A, 0, "side")
         self.assertIsNone(doll)
         self.assertFalse(game["result"]["success"])
@@ -271,7 +274,7 @@ class ServiceTests(Base):
 
     async def test_boundary_roll(self):
         gid = await self.game_with(cand(grip="smooth", position="pile"))
-        self.rng.roll = 39
+        self.rng.roll = 28                                    # 成功率 29%：roll 28 成功
         _, doll, _ = await self.svc.grab(G, gid, A, 0, "side")
         self.assertIsNotNone(doll)
 
