@@ -164,6 +164,7 @@ class ClawService:
                     "reveal_text": egg["reveal_text"], "emoji": egg["emoji"]} if egg else None,
             "original_owner_id": str(user_id), "current_owner_id": str(user_id),
             "caught_at": now, "acquired_at": now, "is_showcased": False,
+            "is_favorite": False, "is_recycled": False, "recycled_at": None,
             "source_game_id": game["id"], "pending_gift": None, "history": [],
         }
         doc["dolls"][did] = doll
@@ -175,13 +176,22 @@ class ClawService:
         return self.store.load(guild_id)["dolls"].get(doll_id)
 
     def collection(self, guild_id: int, user_id: int, flt: str = "all") -> list[dict]:
-        """当前持有的娃娃，最新获得的在前。"""
-        dolls = [d for d in self.store.load(guild_id)["dolls"].values() if d["current_owner_id"] == str(user_id)]
+        """当前持有的娃娃。收藏（⭐）的排最前，其余按获得时间从新到旧。
+        回收站里的娃娃只在 flt == "recycled" 时出现（按回收时间从新到旧），其他筛选都看不到。"""
+        mine = [d for d in self.store.load(guild_id)["dolls"].values() if d["current_owner_id"] == str(user_id)]
+        if flt == "recycled":
+            bin_ = [d for d in mine if d.get("is_recycled")]
+            return sorted(bin_, key=lambda d: (d.get("recycled_at") or "", d["id"]), reverse=True)
+        dolls = [d for d in mine if not d.get("is_recycled")]
         if flt == "eggs":
             dolls = [d for d in dolls if d["egg"]]
         elif flt == "showcase":
             dolls = [d for d in dolls if d["is_showcased"]]
-        return sorted(dolls, key=lambda d: (d["acquired_at"], d["id"]), reverse=True)
+        elif flt == "favorites":
+            dolls = [d for d in dolls if d.get("is_favorite")]
+        dolls.sort(key=lambda d: (d["acquired_at"], d["id"]), reverse=True)
+        dolls.sort(key=lambda d: not d.get("is_favorite"))          # 稳定排序：收藏的整体提到前面
+        return dolls
 
     def page(self, guild_id: int, user_id: int, flt: str, page: int) -> tuple[list[dict], int, int]:
         """返回 (本页娃娃, 规范化后的页码, 总页数)。"""
@@ -197,12 +207,44 @@ class ClawService:
     async def set_showcase(self, guild_id: int, user_id: int, doll_id: str, on: bool) -> dict:
         async with self.store.transaction(guild_id) as doc:
             doll = self._owned(doc, doll_id, user_id)
+            if on and doll.get("is_recycled"):
+                raise ClawError("这只娃娃在回收站里，先恢复到收藏柜再展示。")
             if on and not doll["is_showcased"]:
                 count = sum(1 for d in doc["dolls"].values()
                             if d["current_owner_id"] == str(user_id) and d["is_showcased"])
                 if count >= self.cfg["max_showcase"]:
                     raise ClawError(f"展示位最多 {self.cfg['max_showcase']} 只，先取消一只再来。")
             doll["is_showcased"] = on
+            return doll
+
+    async def set_favorite(self, guild_id: int, user_id: int, doll_id: str, on: bool) -> dict:
+        """收藏 / 取消收藏。收藏没有数量上限，收藏的娃娃在收藏柜里总排在最前。"""
+        async with self.store.transaction(guild_id) as doc:
+            doll = self._owned(doc, doll_id, user_id)
+            if on and doll.get("is_recycled"):
+                raise ClawError("这只娃娃在回收站里，先恢复到收藏柜再收藏。")
+            doll["is_favorite"] = on
+            return doll
+
+    async def set_recycled(self, guild_id: int, user_id: int, doll_id: str, on: bool) -> dict:
+        """回收 / 从回收站恢复。回收不删除娃娃，只是不在收藏柜里显示；同时取消收藏和展示。
+        有待确认的赠礼时不能回收（避免对方收下一只“看不见”的娃娃）。"""
+        async with self.store.transaction(guild_id) as doc:
+            doll = self._owned(doc, doll_id, user_id)
+            if on:
+                if doll.get("is_recycled"):
+                    raise ClawError("这只娃娃已经在回收站里了。")
+                if doll["pending_gift"]:
+                    gift = doc["gifts"].get(doll["pending_gift"])
+                    if gift is not None and not self._expire_in(doc, gift) and gift["status"] == GIFT_PENDING:
+                        raise ClawError("这只娃娃有一份待对方确认的赠礼，先撤回赠礼再回收。")
+                    doll["pending_gift"] = None
+                doll["is_recycled"], doll["recycled_at"] = True, _iso(self.now())
+                doll["is_favorite"] = doll["is_showcased"] = False
+            else:
+                if not doll.get("is_recycled"):
+                    raise ClawError("这只娃娃不在回收站里。")
+                doll["is_recycled"], doll["recycled_at"] = False, None
             return doll
 
     @staticmethod
@@ -284,6 +326,8 @@ class ClawService:
                 raise ClawError("不能送给自己哦。")
             if to_is_bot:
                 raise ClawError("不能送给 Bot。")
+            if doll.get("is_recycled"):
+                raise ClawError("这只娃娃在回收站里，先恢复到收藏柜再送。")
             if doll["pending_gift"]:
                 old = doc["gifts"].get(doll["pending_gift"])
                 if old is not None and not self._expire_in(doc, old) and old["status"] == GIFT_PENDING:
@@ -342,6 +386,7 @@ class ClawService:
                 doll["current_owner_id"] = gift["to_id"]
                 doll["acquired_at"] = now
                 doll["is_showcased"] = False
+                doll["is_favorite"], doll["is_recycled"], doll["recycled_at"] = False, False, None
                 doll["history"].append({"from": gift["from_id"], "to": gift["to_id"], "at": now, "gift_id": gift["id"]})
                 doc["stats"].setdefault(gift["from_id"], _new_stats())["gifts_sent"] += 1
                 doc["stats"].setdefault(gift["to_id"], _new_stats())["gifts_received"] += 1

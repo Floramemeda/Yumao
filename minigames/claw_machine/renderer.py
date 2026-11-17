@@ -113,10 +113,7 @@ def detail_embed(doll: dict) -> discord.Embed:
         f"当前持有者：{_m(doll['current_owner_id'])}",
         f"抓获于：<t:{_ts(doll['caught_at'])}:f>",
     ]
-    if doll["is_showcased"]:
-        lines.append("🏆 正在展示")
-    if doll["pending_gift"]:
-        lines.append("🎁 有一份待对方确认的赠礼，暂时锁定")
+    lines += status_lines(doll)
     return discord.Embed(title="🧸 娃娃详情", description="\n".join(lines),
                          color=COLOR_EGG if doll["egg"] else COLOR_INFO)
 
@@ -125,18 +122,38 @@ def _ts(iso: str) -> int:
     return int(datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
 
 
-FILTER_LABELS = {"all": "全部", "eggs": "隐藏彩蛋", "showcase": "展示中"}
+FILTER_LABELS = {"all": "全部", "favorites": "收藏", "eggs": "隐藏彩蛋", "showcase": "展示中"}
+
+
+def status_lines(doll: dict) -> list[str]:
+    lines = []
+    if doll.get("is_recycled"):
+        lines.append("🗑️ 在回收站里（恢复后才会回到收藏柜）")
+    if doll.get("is_favorite"):
+        lines.append("⭐ 已收藏")
+    if doll["is_showcased"]:
+        lines.append("🏆 正在展示")
+    if doll["pending_gift"]:
+        lines.append("🎁 有一份待对方确认的赠礼，暂时锁定")
+    return lines
 
 
 def short_line(doll: dict) -> str:
-    marks = ("🏆" if doll["is_showcased"] else "") + ("✨" if doll["egg"] else "") + ("🎁" if doll["pending_gift"] else "")
+    marks = ("⭐" if doll.get("is_favorite") else "") + ("🏆" if doll["is_showcased"] else "") + \
+            ("✨" if doll["egg"] else "") + ("🎁" if doll["pending_gift"] else "")
     return f"`{doll['id']}` {doll['name']} {marks}".rstrip()
 
 
 def collection_embed(user_id: int, dolls: list[dict], flt: str, page: int, pages: int, total: int) -> discord.Embed:
+    if flt == "recycled":
+        body = "\n".join(short_line(d) for d in dolls) or "回收站是空的。"
+        embed = discord.Embed(title="🗑️ 回收站", description=f"{_m(user_id)} · 共 {total} 只\n\n{body}",
+                              color=COLOR_INFO)
+        embed.set_footer(text=f"第 {page + 1}/{pages} 页 · 选一只查看，可以恢复到收藏柜")
+        return embed
     body = "\n".join(short_line(d) for d in dolls) or "这里还空空的，去娃娃机试试手气吧～"
     embed = discord.Embed(title="🧸 我的收藏柜", description=f"{_m(user_id)} · 共 {total} 只\n\n{body}", color=COLOR_INFO)
-    embed.set_footer(text=f"筛选：{FILTER_LABELS[flt]} · 第 {page + 1}/{pages} 页 · 🏆展示中 ✨彩蛋 🎁赠送中")
+    embed.set_footer(text=f"筛选：{FILTER_LABELS[flt]} · 第 {page + 1}/{pages} 页 · ⭐收藏 🏆展示中 ✨彩蛋 🎁赠送中")
     return embed
 
 
@@ -202,10 +219,7 @@ def egg_card_embed(doll: dict) -> discord.Embed:
         f"当前持有者：{_m(doll['current_owner_id'])}",
         f"抓获于：<t:{_ts(doll['caught_at'])}:f>",
     ]
-    if doll["is_showcased"]:
-        lines.append("🏆 正在展示")
-    if doll["pending_gift"]:
-        lines.append("🎁 有一份待对方确认的赠礼，暂时锁定")
+    lines += status_lines(doll)
     return discord.Embed(title="✨ 云州名场面 · 收藏卡", description="\n".join(lines), color=COLOR_EGG)
 
 

@@ -106,11 +106,37 @@ class GiveButton(discord.ui.DynamicItem[discord.ui.Button], template=r"claw:give
         await cog.open_gift_picker(interaction, self.doll_id)
 
 
+class DollButton(discord.ui.DynamicItem[discord.ui.Button], template=r"claw:(?P<op>fav|rec):(?P<d>[A-Za-z0-9\-]+)"):
+    """结算结果上的【收藏】【回收】。按钮只编码娃娃编号，点下去按存档里的当前状态切换 / 回收。"""
+
+    def __init__(self, op: str, doll_id: str, *, label: str = "", emoji: str | None = None,
+                 style: discord.ButtonStyle = discord.ButtonStyle.secondary):
+        super().__init__(discord.ui.Button(label=label or op, emoji=emoji, style=style,
+                                           custom_id=f"claw:{op}:{doll_id}"))
+        self.op, self.doll_id = op, doll_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["op"], match["d"], label=item.label or "", style=item.style)
+
+    async def callback(self, interaction: discord.Interaction):
+        cog = _cog(interaction)
+        if cog is None:
+            return await _unavailable(interaction)
+        await cog.handle_doll_button(interaction, self.op, self.doll_id)
+
+
 def result_view(doll: dict | None) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
+    if doll is not None:
+        fav = doll.get("is_favorite")
+        view.add_item(DollButton("fav", doll["id"], label="取消收藏" if fav else "收藏", emoji="⭐",
+                                 style=discord.ButtonStyle.secondary if fav else discord.ButtonStyle.primary))
     view.add_item(CollectionButton())
     if doll is not None:
         view.add_item(GiveButton(doll["id"]))
+        view.add_item(DollButton("rec", doll["id"], label="已回收" if doll.get("is_recycled") else "回收",
+                                 emoji="🗑️", style=discord.ButtonStyle.danger))
     return view
 
 
@@ -150,25 +176,31 @@ def gift_view(gift_id: str) -> discord.ui.View:
 # ---------------------------------------------------------------------- 收藏柜（仅本人可见）
 
 class CollectionView(discord.ui.View):
+    """收藏柜列表；flt == "recycled" 时就是回收站列表（没有筛选，底部按钮换成「返回收藏柜」）。"""
+
     def __init__(self, cog: ClawMachine, dolls: list[dict], flt: str, page: int, pages: int):
         super().__init__(timeout=600)
         self.cog, self.flt, self.page = cog, flt, page
+        in_bin = flt == "recycled"
         if dolls:
-            pick = discord.ui.Select(placeholder="查看详情……", row=0, options=[
+            pick = discord.ui.Select(placeholder="选一只查看 / 恢复……" if in_bin else "查看详情……", row=0, options=[
                 discord.SelectOption(label=d["name"][:100], value=d["id"], description=d["id"],
-                                     emoji="✨" if d["egg"] else "🧸") for d in dolls])
+                                     emoji="⭐" if d.get("is_favorite") else "✨" if d["egg"] else "🧸")
+                for d in dolls])
             pick.callback = self._pick
             self.add_item(pick)
-        flt_select = discord.ui.Select(placeholder="筛选", row=1, options=[
-            discord.SelectOption(label=f"筛选：{text}", value=key, default=key == flt)
-            for key, text in FILTER_LABELS.items()])
-        flt_select.callback = self._filter
-        self.add_item(flt_select)
+        if not in_bin:
+            flt_select = discord.ui.Select(placeholder="筛选", row=1, options=[
+                discord.SelectOption(label=f"筛选：{text}", value=key, default=key == flt)
+                for key, text in FILTER_LABELS.items()])
+            flt_select.callback = self._filter
+            self.add_item(flt_select)
         prev = discord.ui.Button(label="上一页", emoji="◀️", row=2, disabled=page <= 0)
         nxt = discord.ui.Button(label="下一页", emoji="▶️", row=2, disabled=page >= pages - 1)
-        prev.callback, nxt.callback = self._prev, self._next
-        self.add_item(prev)
-        self.add_item(nxt)
+        swap = discord.ui.Button(label="返回收藏柜" if in_bin else "查看回收站", emoji="🧸" if in_bin else "🗑️", row=2)
+        prev.callback, nxt.callback, swap.callback = self._prev, self._next, self._swap
+        for b in (prev, nxt, swap):
+            self.add_item(b)
 
     async def _pick(self, interaction: discord.Interaction):
         await self.cog.show_detail(interaction, interaction.data["values"][0], self.flt, self.page)
@@ -182,19 +214,43 @@ class CollectionView(discord.ui.View):
     async def _next(self, interaction: discord.Interaction):
         await self.cog.show_collection(interaction, self.flt, self.page + 1, edit=True)
 
+    async def _swap(self, interaction: discord.Interaction):
+        await self.cog.show_collection(interaction, "all" if self.flt == "recycled" else "recycled", 0, edit=True)
+
 
 class DetailView(discord.ui.View):
     def __init__(self, cog: ClawMachine, doll: dict, flt: str, page: int):
         super().__init__(timeout=600)
         self.cog, self.doll_id, self.flt, self.page = cog, doll["id"], flt, page
-        show = discord.ui.Button(label="取消展示" if doll["is_showcased"] else "设为展示", emoji="🏆",
+        self.showcased, self.favorite = doll["is_showcased"], bool(doll.get("is_favorite"))
+        if doll.get("is_recycled"):
+            restore = discord.ui.Button(label="恢复到收藏柜", emoji="♻️", style=discord.ButtonStyle.success)
+            back = discord.ui.Button(label="返回回收站", emoji="↩️")
+            restore.callback, back.callback = self._restore, self._back
+            self.add_item(restore)
+            self.add_item(back)
+            return
+        fav = discord.ui.Button(label="取消收藏" if self.favorite else "收藏", emoji="⭐",
+                                style=discord.ButtonStyle.secondary if self.favorite else discord.ButtonStyle.primary)
+        show = discord.ui.Button(label="取消展示" if self.showcased else "设为展示", emoji="🏆",
                                  style=discord.ButtonStyle.primary)
         give = discord.ui.Button(label="赠送", emoji="🎁", disabled=bool(doll["pending_gift"]))
+        rec = discord.ui.Button(label="回收", emoji="🗑️", style=discord.ButtonStyle.danger,
+                                disabled=bool(doll["pending_gift"]))
         back = discord.ui.Button(label="返回收藏柜", emoji="↩️")
-        self.showcased = doll["is_showcased"]
-        show.callback, give.callback, back.callback = self._show, self._give, self._back
-        for b in (show, give, back):
+        fav.callback, show.callback, give.callback = self._fav, self._show, self._give
+        rec.callback, back.callback = self._recycle, self._back
+        for b in (fav, show, give, rec, back):
             self.add_item(b)
+
+    async def _fav(self, interaction: discord.Interaction):
+        await self.cog.toggle_favorite(interaction, self.doll_id, not self.favorite, self.flt, self.page)
+
+    async def _recycle(self, interaction: discord.Interaction):
+        await self.cog.toggle_recycle(interaction, self.doll_id, True, self.flt, self.page)
+
+    async def _restore(self, interaction: discord.Interaction):
+        await self.cog.toggle_recycle(interaction, self.doll_id, False, self.flt, self.page)
 
     async def _show(self, interaction: discord.Interaction):
         await self.cog.toggle_showcase(interaction, self.doll_id, not self.showcased, self.flt, self.page)
@@ -264,4 +320,4 @@ class EggBookView(discord.ui.View):
         await self.cog.show_discoveries(interaction, edit=True)
 
 
-DYNAMIC_ITEMS = (GameButton, CollectionButton, GiveButton, GiftButton)
+DYNAMIC_ITEMS = (GameButton, CollectionButton, GiveButton, DollButton, GiftButton)

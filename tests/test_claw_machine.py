@@ -842,5 +842,186 @@ class AnnounceTests(Base):
         self.assertEqual(self.svc.first_discoveries(G)["snowball_grows"]["announcement_status"], "sent")
 
 
+# ---------------------------------------------------------------------- 收藏 / 回收站
+
+class FavoriteRecycleTests(Base):
+    async def many(self, n, user=A):
+        dolls = []
+        for _ in range(n):
+            self.clock.t += timedelta(minutes=1)
+            dolls.append(await self.win(user=user))
+        return dolls
+
+    def ids(self, flt="all", user=A):
+        return [d["id"] for d in self.svc.collection(G, user, flt)]
+
+    async def test_new_doll_defaults(self):
+        d = await self.win()
+        self.assertEqual((d["is_favorite"], d["is_recycled"], d["recycled_at"]), (False, False, None))
+
+    async def test_favorites_first_and_unlimited(self):
+        dolls = await self.many(12)                                    # 比一页（8 只）还多
+        newest_first = [d["id"] for d in reversed(dolls)]
+        self.assertEqual(self.ids(), newest_first)
+        favs = [dolls[0]["id"], dolls[3]["id"], dolls[1]["id"]] + [d["id"] for d in dolls[5:12]]
+        for did in favs:                                                # 10 只，超过展示上限也能收藏
+            await self.svc.set_favorite(G, A, did, True)
+        got = self.ids()
+        self.assertEqual(set(got[:10]), set(favs))
+        self.assertEqual(got[:10], [i for i in newest_first if i in favs])   # 收藏内部仍按新到旧
+        self.assertEqual(got[10:], [i for i in newest_first if i not in favs])
+        self.assertEqual(set(self.ids("favorites")), set(favs))
+        page, _, pages = self.svc.page(G, A, "all", 0)
+        self.assertTrue(all(d["is_favorite"] for d in page))           # 第一页全是收藏
+        self.assertEqual(pages, 2)
+        await self.svc.set_favorite(G, A, dolls[0]["id"], False)
+        self.assertEqual(self.ids()[-1], dolls[0]["id"])
+
+    async def test_recycle_hides_and_restore(self):
+        d1, d2 = await self.many(2)
+        await self.svc.set_favorite(G, A, d1["id"], True)
+        await self.svc.set_showcase(G, A, d1["id"], True)
+        d = await self.svc.set_recycled(G, A, d1["id"], True)
+        self.assertTrue(d["is_recycled"])
+        self.assertFalse(d["is_favorite"] or d["is_showcased"])         # 回收会取消收藏和展示
+        self.assertEqual(self.ids(), [d2["id"]])
+        for flt in ("eggs", "showcase", "favorites"):
+            self.assertNotIn(d1["id"], self.ids(flt))
+        self.assertEqual(self.ids("recycled"), [d1["id"]])
+        self.assertEqual(self.svc.showcase(G, A), [])
+        with self.assertRaises(ClawError):
+            await self.svc.set_recycled(G, A, d1["id"], True)            # 重复回收
+        await self.svc.set_recycled(G, A, d1["id"], False)
+        self.assertEqual(set(self.ids()), {d1["id"], d2["id"]})
+        self.assertEqual(self.ids("recycled"), [])
+        with self.assertRaises(ClawError):
+            await self.svc.set_recycled(G, A, d1["id"], False)           # 不在回收站
+
+    async def test_recycled_blocks_other_actions(self):
+        d = await self.win()
+        await self.svc.set_recycled(G, A, d["id"], True)
+        with self.assertRaises(ClawError):
+            await self.svc.set_favorite(G, A, d["id"], True)
+        with self.assertRaises(ClawError):
+            await self.svc.set_showcase(G, A, d["id"], True)
+        with self.assertRaises(ClawError):
+            await self.svc.create_gift(G, A, d["id"], B)
+        with self.assertRaises(ClawError):
+            await self.svc.set_recycled(G, B, d["id"], False)             # 别人不能动
+
+    async def test_pending_gift_blocks_recycle(self):
+        d = await self.win()
+        gift = await self.svc.create_gift(G, A, d["id"], B)
+        with self.assertRaises(ClawError):
+            await self.svc.set_recycled(G, A, d["id"], True)
+        await self.svc.respond_gift(G, gift["id"], B, "decline")
+        await self.svc.set_recycled(G, A, d["id"], True)
+        self.assertEqual(self.ids("recycled"), [d["id"]])
+
+    async def test_expired_gift_does_not_block_recycle(self):
+        d = await self.win()
+        await self.svc.create_gift(G, A, d["id"], B)
+        self.clock.t += timedelta(hours=CFG["gift_expire_hours"] + 1)
+        await self.svc.set_recycled(G, A, d["id"], True)
+        self.assertIsNone(self.svc.doll(G, d["id"])["pending_gift"])
+
+    async def test_gift_accept_resets_favorite(self):
+        d = await self.win()
+        await self.svc.set_favorite(G, A, d["id"], True)
+        gift = await self.svc.create_gift(G, A, d["id"], B)
+        _, doll, _ = await self.svc.respond_gift(G, gift["id"], B, "accept")
+        self.assertFalse(doll["is_favorite"] or doll["is_recycled"])
+
+    async def test_old_save_without_fields(self):
+        d = await self.win()
+        async with self.svc.store.transaction(G) as doc:
+            for k in ("is_favorite", "is_recycled", "recycled_at"):
+                del doc["dolls"][d["id"]][k]
+        self.assertEqual(self.ids(), [d["id"]])
+        self.assertEqual(self.ids("recycled"), [])
+        await self.svc.set_recycled(G, A, d["id"], True)
+        self.assertEqual(self.ids("recycled"), [d["id"]])
+
+    def test_short_line_and_status(self):
+        d = {"id": "YZ-000001", "name": "x", "egg": None, "is_showcased": False, "pending_gift": None,
+             "is_favorite": True, "is_recycled": True}
+        self.assertIn("⭐", ui.short_line(d))
+        self.assertTrue(any("回收站" in line for line in ui.status_lines(d)))
+
+
+class FavoriteRecycleCogTests(CogTests):
+    async def test_result_view_buttons(self):
+        from minigames.claw_machine.views import result_view
+        d = await self.win()
+        ids = [c.custom_id for c in result_view(d).children]
+        self.assertEqual(ids, [f"claw:fav:{d['id']}", "claw:col", f"claw:give:{d['id']}", f"claw:rec:{d['id']}"])
+        self.assertEqual([c.custom_id for c in result_view(None).children], ["claw:col"])
+
+    async def test_result_buttons(self):
+        d = await self.win()
+        it = interaction(B)
+        await self.cog.handle_doll_button(it, "fav", d["id"])             # 别人点
+        self.assertTrue(it.response.calls[0][2]["ephemeral"])
+        self.assertFalse(self.svc.doll(G, d["id"])["is_favorite"])
+        it = interaction(A)
+        await self.cog.handle_doll_button(it, "fav", d["id"])
+        self.assertTrue(self.svc.doll(G, d["id"])["is_favorite"])
+        self.assertEqual(it.response.calls[0][0], "edit")
+        self.assertEqual(set(it.response.calls[0][2]), {"view"})           # 只改按钮，不动结果内容
+        self.assertEqual(it.response.calls[0][2]["view"].children[0].item.label, "取消收藏")
+        self.assertTrue(it.follow[0][1]["ephemeral"])
+        it = interaction(A)
+        await self.cog.handle_doll_button(it, "rec", d["id"])
+        doll = self.svc.doll(G, d["id"])
+        self.assertTrue(doll["is_recycled"])
+        self.assertFalse(doll["is_favorite"])
+        self.assertEqual(it.response.calls[0][2]["view"].children[-1].item.label, "已回收")
+        it = interaction(A)
+        await self.cog.handle_doll_button(it, "rec", d["id"])             # 再点：只提示去回收站恢复
+        self.assertEqual(it.response.calls[0][0], "send")
+        self.assertIn("回收站", it.response.calls[0][1][0])
+
+    async def test_collection_recycle_flow(self):
+        d1 = await self.win()
+        self.clock.t += timedelta(minutes=1)
+        d2 = await self.win()
+        it = interaction(A)
+        await self.cog.toggle_recycle(it, d1["id"], True, "all", 0)
+        kw = it.response.calls[0][2]
+        self.assertIn("回收站", kw["content"])
+        self.assertNotIn(d1["id"], kw["embed"].description)
+        self.assertIn(d2["id"], kw["embed"].description)
+        it = interaction(A)
+        await self.cog.show_collection(it, "recycled", 0, edit=True)
+        kw = it.response.calls[0][2]
+        self.assertEqual(kw["embed"].title, "🗑️ 回收站")
+        self.assertIn(d1["id"], kw["embed"].description)
+        self.assertIn("返回收藏柜", [getattr(c, "label", None) for c in kw["view"].children])
+        it = interaction(A)
+        await self.cog.show_detail(it, d1["id"], "recycled", 0)
+        labels = [c.label for c in it.response.calls[0][2]["view"].children]
+        self.assertEqual(labels, ["恢复到收藏柜", "返回回收站"])
+        it = interaction(A)
+        await self.cog.toggle_recycle(it, d1["id"], False, "recycled", 0)
+        self.assertIn("已恢复", it.response.calls[0][2]["content"])
+        self.assertEqual({d["id"] for d in self.svc.collection(G, A)}, {d1["id"], d2["id"]})
+
+    async def test_detail_buttons_and_gift_picker(self):
+        d = await self.win()
+        it = interaction(A)
+        await self.cog.show_detail(it, d["id"], "all", 0)
+        labels = [c.label for c in it.response.calls[0][2]["view"].children]
+        self.assertEqual(labels, ["收藏", "设为展示", "赠送", "回收", "返回收藏柜"])
+        await self.svc.set_recycled(G, A, d["id"], True)
+        it = interaction(A)
+        await self.cog.open_gift_picker(it, d["id"])
+        self.assertIn("回收站", it.response.calls[0][1][0])
+
+    # CogTests 里的用例不在这里重复跑
+    for _name in [n for n in vars(CogTests) if n.startswith("test_")]:
+        locals()[_name] = None
+    del _name
+
+
 if __name__ == "__main__":
     unittest.main()

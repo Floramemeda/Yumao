@@ -281,7 +281,8 @@ class ClawMachine(commands.Cog, name="ClawMachine"):
     async def open_collection(self, interaction: discord.Interaction) -> None:
         await self.show_collection(interaction, "all", 0, edit=False)
 
-    async def show_collection(self, interaction: discord.Interaction, flt: str, page: int, *, edit: bool) -> None:
+    async def show_collection(self, interaction: discord.Interaction, flt: str, page: int, *, edit: bool,
+                              note: str | None = None) -> None:
         try:
             dolls, page, pages = self.service.page(interaction.guild_id, interaction.user.id, flt, page)
             total = len(self.service.collection(interaction.guild_id, interaction.user.id, flt))
@@ -290,7 +291,7 @@ class ClawMachine(commands.Cog, name="ClawMachine"):
         embed = ui.collection_embed(interaction.user.id, dolls, flt, page, pages, total)
         view = CollectionView(self, dolls, flt, page, pages)
         if edit:
-            await interaction.response.edit_message(content=None, embed=embed, view=view)
+            await interaction.response.edit_message(content=note, embed=embed, view=view)
         else:
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -298,7 +299,8 @@ class ClawMachine(commands.Cog, name="ClawMachine"):
         doll = self.service.doll(interaction.guild_id, doll_id)
         if doll is None or doll["current_owner_id"] != str(interaction.user.id):
             return await say(interaction, "这只娃娃现在不在你手里。")
-        await interaction.response.edit_message(embed=ui.detail_embed(doll), view=DetailView(self, doll, flt, page))
+        await interaction.response.edit_message(content=None, embed=ui.detail_embed(doll),
+                                                view=DetailView(self, doll, flt, page))
 
     async def toggle_showcase(self, interaction, doll_id: str, on: bool, flt: str, page: int) -> None:
         try:
@@ -309,12 +311,63 @@ class ClawMachine(commands.Cog, name="ClawMachine"):
             return await say(interaction, MSG_STORAGE)
         await interaction.response.edit_message(embed=ui.detail_embed(doll), view=DetailView(self, doll, flt, page))
 
+    async def toggle_favorite(self, interaction, doll_id: str, on: bool, flt: str, page: int) -> None:
+        try:
+            doll = await self.service.set_favorite(interaction.guild_id, interaction.user.id, doll_id, on)
+        except ClawError as e:
+            return await say(interaction, str(e))
+        except StorageError:
+            return await say(interaction, MSG_STORAGE)
+        await interaction.response.edit_message(content=None, embed=ui.detail_embed(doll),
+                                                view=DetailView(self, doll, flt, page))
+
+    async def toggle_recycle(self, interaction, doll_id: str, on: bool, flt: str, page: int) -> None:
+        """回收后回到收藏柜列表（它已经不在里面了）；恢复后回到回收站列表。"""
+        try:
+            doll = await self.service.set_recycled(interaction.guild_id, interaction.user.id, doll_id, on)
+        except ClawError as e:
+            return await say(interaction, str(e))
+        except StorageError:
+            return await say(interaction, MSG_STORAGE)
+        if on:
+            note = f"🗑️ 已把 **{doll['name']}** 放进回收站，想要回来可以在「查看回收站」里恢复。"
+            await self.show_collection(interaction, flt if flt != "recycled" else "all", page, edit=True, note=note)
+        else:
+            note = f"♻️ **{doll['name']}** 已恢复到收藏柜。"
+            await self.show_collection(interaction, "recycled", page, edit=True, note=note)
+
+    async def handle_doll_button(self, interaction: discord.Interaction, op: str, doll_id: str) -> None:
+        """结算结果上的【收藏】【回收】：只有娃娃现在的主人能点；点完只改这条消息的按钮，不动结果内容。"""
+        doll = self.service.doll(interaction.guild_id, doll_id)
+        if doll is None or doll["current_owner_id"] != str(interaction.user.id):
+            return await say(interaction, "这只娃娃现在不在你手里。")
+        try:
+            if op == "fav":
+                doll = await self.service.set_favorite(interaction.guild_id, interaction.user.id, doll_id,
+                                                       not doll.get("is_favorite"))
+            elif doll.get("is_recycled"):
+                return await say(interaction, "这只娃娃已经在回收站里了，可以在 `/claw collection` →「查看回收站」里恢复。")
+            else:
+                doll = await self.service.set_recycled(interaction.guild_id, interaction.user.id, doll_id, True)
+        except ClawError as e:
+            return await say(interaction, str(e))
+        except StorageError:
+            return await say(interaction, MSG_STORAGE)
+        await interaction.response.edit_message(view=result_view(doll))
+        if op == "fav":
+            text = "⭐ 已收藏，它会排在收藏柜最前面。" if doll["is_favorite"] else "已取消收藏。"
+        else:
+            text = "🗑️ 已放进回收站，不会再出现在收藏柜里；想要回来可以在 `/claw collection` →「查看回收站」里恢复。"
+        await interaction.followup.send(text, ephemeral=True)
+
     # ------------------------------------------------------------------ 赠送
 
     async def open_gift_picker(self, interaction: discord.Interaction, doll_id: str, *, edit: bool = False) -> None:
         doll = self.service.doll(interaction.guild_id, doll_id)
         if doll is None or doll["current_owner_id"] != str(interaction.user.id):
             return await say(interaction, "这只娃娃现在不在你手里。")
+        if doll.get("is_recycled"):
+            return await say(interaction, "这只娃娃在回收站里，先恢复到收藏柜再送。")
         if doll["pending_gift"]:
             gift = self.service.gift(interaction.guild_id, doll["pending_gift"])
             if gift and gift["status"] == "pending":
