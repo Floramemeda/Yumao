@@ -109,7 +109,7 @@ class EngineTests(unittest.TestCase):
             self.assertIn(c["position"], CFG["positions"])
 
     def test_pool_sizes(self):
-        self.assertEqual([len(CFG[k]) for k in ("subjects", "moods", "toy_types", "quirks")], [25, 32, 15, 37])
+        self.assertEqual([len(CFG[k]) for k in ("subjects", "moods", "toy_types", "quirks")], [25, 32, 15, 38])
 
     def test_name_format(self):
         c = cand("青楼老板娘", "偷薯饼的", "毛绒团子", "一捏就大喊「薯饼是我的！」")
