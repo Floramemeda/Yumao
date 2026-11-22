@@ -109,7 +109,7 @@ class EngineTests(unittest.TestCase):
             self.assertIn(c["position"], CFG["positions"])
 
     def test_pool_sizes(self):
-        self.assertEqual([len(CFG[k]) for k in ("subjects", "moods", "toy_types", "quirks")], [25, 33, 15, 39])
+        self.assertEqual([len(CFG[k]) for k in ("subjects", "moods", "toy_types", "quirks")], [26, 34, 15, 40])
 
     def test_name_format(self):
         c = cand("青楼老板娘", "偷薯饼的", "毛绒团子", "一捏就大喊「薯饼是我的！」")
@@ -151,6 +151,8 @@ class EngineTests(unittest.TestCase):
             "squeeze_master": cand("子妤", "修煤气的", "八音盒", "对你说「今天榨主人」"),
             "ergou_private": cand("二狗", "正在自慰的"),
             "spiral_crash": cand("触手怪", "螺旋起飞的", "毛绒团子", "坠机后发出了「man！」的声音"),
+            "five_hundred_stones": cand("枭渡", "正在嫖娼的", "毛绒团子",
+                                        "怒吼道「你特娘的第二次出来卖就敢收老子五百灵石？！」"),
         }
         self.assertEqual(set(cases), {e["id"] for e in CFG["_eggs"]})
         for egg_id, c in cases.items():
@@ -614,6 +616,8 @@ EGG_CANDS = {
     "squeeze_master": lambda: cand("子妤", "偷偷傻笑的", "八音盒", "对你说「今天榨主人」"),
     "ergou_private": lambda: cand("二狗", "正在自慰的"),
     "spiral_crash": lambda: cand("触手怪", "螺旋起飞的", "八音盒", "坠机后发出了「man！」的声音"),
+    "five_hundred_stones": lambda: cand("枭渡", "正在嫖娼的", "八音盒",
+                                        "怒吼道「你特娘的第二次出来卖就敢收老子五百灵石？！」"),
 }
 
 
