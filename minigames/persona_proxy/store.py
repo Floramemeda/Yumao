@@ -27,7 +27,7 @@ class StorageError(Exception):
 
 def _empty(guild_id: int) -> dict:
     return {"schema_version": SCHEMA_VERSION, "guild_id": str(guild_id), "grants": {}, "profiles": [],
-            "drafts": {}, "webhook_ids": {}}
+            "drafts": {}, "webhook_ids": {}, "reply_notify_off": []}
 
 
 class PersonaStore:
@@ -35,6 +35,7 @@ class PersonaStore:
         self.data_dir = Path(data_dir)
         self.docs: dict[int, dict] = {}
         self.locks: dict[int, asyncio.Lock] = {}
+        self.audit_index: dict[int, dict[str, dict]] = {}   # guild → 消息 id → 审计记录（首次查询时从文件建立）
 
     def lock(self, guild_id: int) -> asyncio.Lock:
         return self.locks.setdefault(guild_id, asyncio.Lock())
@@ -122,19 +123,26 @@ class PersonaStore:
                 os.fsync(f.fileno())
         except OSError as e:
             log.error("皮套：guild=%s 审计写入失败（%s）", guild_id, type(e).__name__)
+            return
+        if guild_id in self.audit_index:
+            self._index_audit(self.audit_index[guild_id], record)
+
+    @staticmethod
+    def _index_audit(index: dict[str, dict], record: dict) -> None:
+        for mid in record.get("message_ids", []):
+            index[str(mid)] = record          # 同一消息 id 有多条记录时以最后一条为准
 
     def find_audit(self, guild_id: int, message_id: int) -> dict | None:
-        p = self.audit_path(guild_id)
-        if not p.exists():
-            return None
-        target = str(message_id)
-        found = None
-        with open(p, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if target in rec.get("message_ids", []):
-                    found = rec
-        return found
+        """按消息 id 查审计记录。每条回复都会查，所以走内存索引，不再每次扫文件。"""
+        if guild_id not in self.audit_index:
+            index: dict[str, dict] = {}
+            p = self.audit_path(guild_id)
+            if p.exists():
+                with open(p, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            self._index_audit(index, json.loads(line))
+                        except (ValueError, AttributeError):   # 损坏的行跳过
+                            continue
+            self.audit_index[guild_id] = index
+        return self.audit_index[guild_id].get(str(message_id))

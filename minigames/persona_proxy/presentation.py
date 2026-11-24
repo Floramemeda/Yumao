@@ -38,6 +38,22 @@ def reply_content(header: str, text: str) -> str:
     return f"{header}\n{text}"
 
 
+def reply_notify_text(profile_name: str, guild_name: str, channel_id: int, replier_name: str, content: str,
+                      jump_url: str, snippet_length: int) -> str:
+    """皮套消息被回复时私信给实际发言人。replier_name 是回复者在频道里显示的名字（用皮套回复时就是皮套名）。"""
+    snippet = " ".join((content or "").split())
+    if len(snippet) > snippet_length:
+        snippet = snippet[:snippet_length] + "…"
+    lines = [f"💬 你用皮套「{discord.utils.escape_markdown(profile_name)}」在「{discord.utils.escape_markdown(guild_name)}」"
+             f"<#{channel_id}> 发的消息收到了回复",
+             f"回复者：**{discord.utils.escape_markdown(replier_name)}**"]
+    if snippet:
+        lines.append(f"> {discord.utils.escape_markdown(snippet)}")
+    lines.append(f"[跳转到回复]({jump_url})")
+    lines.append("-# 不想收到这类私信？在服务器里用 `/皮套提醒` 关闭")
+    return "\n".join(lines)
+
+
 def draft_label(d: dict, profile_name: str) -> str:
     when = d["created_at"][5:16].replace("T", " ")
     snippet = " ".join(d["text"].split())[:30]

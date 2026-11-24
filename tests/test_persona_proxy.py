@@ -274,6 +274,7 @@ class FakeInteraction:
     def __init__(self, uid=1, roles=(ROLE,), guild=G, channel=None, data=None, itype=None, **perm):
         self.user = NS(id=uid, roles=[NS(id=r) for r in roles])
         self.guild_id = guild
+        self.guild = None           # 需要服务器对象的测试（被回复提醒）自己替换
         self.channel = channel or FakeTextChannel(CH, messages={42})
         self.channel_id = self.channel.id
         self.permissions = perms(**perm)
@@ -590,6 +591,193 @@ class CogTests(unittest.IsolatedAsyncioTestCase):
         desc = it.messages[0].embed.description
         self.assertIn("✅ 可用", desc)
         self.assertIn("暂时停用", desc)
+
+
+# ---------------------------------------------------------------- 被回复私信提醒
+
+class FakeMember:
+    def __init__(self, uid, forbid=False):
+        self.id, self.forbid, self.dms = uid, forbid, []
+
+    async def send(self, content=None, allowed_mentions=None, **kw):
+        if self.forbid:
+            raise discord.Forbidden(NS(status=403, reason="dm closed"), "dm closed")
+        self.dms.append((content, allowed_mentions))
+
+
+class FakeGuild:
+    def __init__(self, *members):
+        self.id, self.name = G, "测试服"
+        self.members = {m.id: m for m in members}
+
+    def get_member(self, uid):
+        return self.members.get(uid)
+
+    async def fetch_member(self, uid):
+        raise discord.NotFound(NS(status=404, reason="nf"), "nf")
+
+
+class ViewChannel(FakeTextChannel):
+    """只有 viewers 里的人看得到的频道。"""
+
+    def __init__(self, cid, viewers, messages=()):
+        super().__init__(cid, messages)
+        self.viewers = set(viewers)
+
+    def permissions_for(self, member):
+        return NS(view_channel=member.id in self.viewers, manage_threads=False)
+
+
+def native_reply(guild, channel, target_mid, uid=2, content="回你一句", **kw):
+    msg = dict(guild=guild, channel=channel, webhook_id=None, type=discord.MessageType.reply,
+               author=NS(id=uid, bot=False, display_name=f"玩家{uid}"), reference=NS(message_id=target_mid),
+               content=content, jump_url=f"https://discord.com/channels/{G}/{channel.id}/777")
+    msg.update(kw)
+    return NS(**msg)
+
+
+class ReplyNotifyTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.svc = make_service(self.tmp.name)
+        self.sender = FakeSender()
+        self.cog = PersonaProxy(NS(get_channel=lambda cid: None, user=NS(id=1)), self.svc, self.sender)
+        self.patch = mock.patch.object(cog_mod, "check_channel", lambda i: None)
+        self.patch.start()
+        self.m1, self.m2, self.mod = FakeMember(1), FakeMember(2), FakeMember(MOD_USER)
+        self.guild = FakeGuild(self.m1, self.m2, self.mod)
+        self.ch = ViewChannel(CH, viewers={1, 2, MOD_USER})
+
+    async def asyncTearDown(self):
+        self.patch.stop()
+        self.tmp.cleanup()
+
+    async def persona_msg(self, owner=1, speaker=None, name="释无相"):
+        """owner 的皮套由 speaker（默认本人）发一条消息，返回消息 id。"""
+        p, _, _ = await self.svc.create_profile(G, owner, (ROLE,), name, AVATAR, "")
+        speaker = speaker or owner
+        it = FakeInteraction(uid=speaker, roles=() if speaker == MOD_USER else (ROLE,))
+        await self.cog.say.callback(self.cog, it, profile=p["id"], message="原话")
+        return 10_000 + len(self.sender.sent), p          # FakeSender 的消息 id
+
+    async def test_native_reply_dms_actual_speaker(self):
+        mid, _ = await self.persona_msg()
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid, content="**你好** <@1>"))
+        self.assertEqual(len(self.m1.dms), 1)
+        text, allowed = self.m1.dms[0]
+        self.assertIn("「释无相」", text)
+        self.assertIn("玩家2", text)
+        self.assertIn(r"\*\*你好\*\*", text)                       # 引用内容做了 markdown 转义
+        self.assertIn(f"/{CH}/777", text)
+        self.assertEqual(allowed.users, False)                      # 私信里任何 @ 都不提醒
+        self.assertEqual(allowed.everyone, False)
+
+    async def test_admin_borrowed_profile_notifies_admin_not_owner(self):
+        mid, _ = await self.persona_msg(owner=1, speaker=MOD_USER)
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        self.assertEqual(len(self.mod.dms), 1)
+        self.assertEqual(self.m1.dms, [])
+
+    async def test_self_reply_and_irrelevant_messages_ignored(self):
+        mid, _ = await self.persona_msg()
+        cases = {
+            "自己回自己": native_reply(self.guild, self.ch, mid, uid=1),
+            "不是皮套消息": native_reply(self.guild, self.ch, 42),
+            "不是回复": native_reply(self.guild, self.ch, mid, type=discord.MessageType.default),
+            "机器人": native_reply(self.guild, self.ch, mid, author=NS(id=3, bot=True, display_name="bot")),
+            "Webhook 发的": native_reply(self.guild, self.ch, mid, webhook_id=9000),
+            "私信": native_reply(None, self.ch, mid),
+        }
+        for label, msg in cases.items():
+            with self.subTest(label):
+                await self.cog.notify_on_native_reply(msg)
+        self.assertEqual(self.m1.dms, [])
+
+    async def test_toggle(self):
+        mid, _ = await self.persona_msg()
+        it = FakeInteraction(uid=1)
+        await self.cog.reply_notify.callback(self.cog, it, state=NS(value="off"))
+        self.assertIn("已关闭", it.last)
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        self.assertEqual(self.m1.dms, [])
+        it = FakeInteraction(uid=1)
+        await self.cog.reply_notify.callback(self.cog, it, state=None)
+        self.assertIn("当前：关闭", it.last)
+        await self.cog.reply_notify.callback(self.cog, FakeInteraction(uid=1), state=NS(value="on"))
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        self.assertEqual(len(self.m1.dms), 1)
+
+    async def test_cooldown_per_user_and_channel(self):
+        mid, _ = await self.persona_msg()
+        other = ViewChannel(CH + 1, viewers={1, 2})
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        self.assertEqual(len(self.m1.dms), 1)                       # 同频道冷却中
+        await self.cog.notify_reply(self.guild, other, mid, 2, "玩家2", "别处", "https://x")
+        self.assertEqual(len(self.m1.dms), 2)                       # 换个频道照常提醒
+        self.svc.clock.now += timedelta(seconds=self.svc.cfg["reply_notify_cooldown_seconds"])
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        self.assertEqual(len(self.m1.dms), 3)                       # 冷却过了
+
+    async def test_skips_without_consuming_cooldown(self):
+        mid, _ = await self.persona_msg()
+        self.ch.viewers.discard(1)
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        self.assertEqual(self.m1.dms, [])                           # 看不到频道：不提醒
+        self.ch.viewers.add(1)
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        self.assertEqual(len(self.m1.dms), 1)                       # 刚才没占用冷却
+        del self.guild.members[1]
+        self.svc.clock.now += timedelta(hours=1)
+        await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        self.assertEqual(len(self.m1.dms), 1)                       # 已经不在服务器：不提醒
+
+    async def test_dm_closed_is_swallowed(self):
+        mid, _ = await self.persona_msg()
+        self.m1.forbid = True
+        with self.assertNoLogs(cog_mod.log, level="ERROR"):
+            await self.cog.notify_on_native_reply(native_reply(self.guild, self.ch, mid))
+        self.assertEqual(self.m1.dms, [])
+
+    async def test_persona_reply_to_persona_notifies_with_persona_name(self):
+        mid, _ = await self.persona_msg(owner=1)
+        p2, _, _ = await self.svc.create_profile(G, 2, (ROLE,), "别人的", AVATAR, "")
+        target = NS(id=mid, webhook_id=9000, author=NS(id=9000, bot=True, display_name="释无相"))
+        ch = ViewChannel(CH, viewers={1, 2}, messages={mid: target})
+        self.sender.fail_on[len(self.sender.sent)] = SendFailed("x")
+        sub = submit(f"pp:reply:{p2['id']}:{mid}:r1", "皮套回皮套", uid=2, channel=ch)
+        sub.guild = self.guild
+        await self.cog.on_interaction(sub)
+        self.assertEqual(self.m1.dms, [])                           # 没发出去就不提醒
+        sub = submit(f"pp:reply:{p2['id']}:{mid}:r2", "皮套回皮套", uid=2, channel=ch)
+        sub.guild = self.guild
+        await self.cog.on_interaction(sub)
+        text = self.m1.dms[0][0]
+        self.assertIn("回复者：**别人的**", text)                    # 只显示皮套名
+        self.assertNotIn("玩家2", text)
+        self.assertNotIn("<@2>", text)
+        self.assertIn("皮套回皮套", text)
+
+
+class AuditIndexTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = PersonaStore(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_index_matches_file_and_last_wins(self):
+        self.assertIsNone(self.store.find_audit(G, 1))              # 建立空索引
+        self.store.append_audit(G, {"owner_id": "1", "message_ids": ["1", "2"]})
+        self.store.append_audit(G, {"owner_id": "3", "message_ids": ["2"]})
+        with open(self.store.audit_path(G), "a", encoding="utf-8") as f:
+            f.write("{bad\n5\n")                                     # 损坏的行
+        self.assertEqual(self.store.find_audit(G, 2)["owner_id"], "3")
+        fresh = PersonaStore(Path(self.tmp.name))                   # 重启后从文件重建
+        self.assertEqual(fresh.find_audit(G, 1)["owner_id"], "1")
+        self.assertEqual(fresh.find_audit(G, 2)["owner_id"], "3")
+        self.assertIsNone(fresh.find_audit(G2, 1))
 
 
 # ---------------------------------------------------------------- 频道权限与 Webhook

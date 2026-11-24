@@ -503,6 +503,7 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
             check_channel(interaction)
             channel = interaction.channel
             ping = None
+            reply_target_id = None
             if d["kind"] == "showcase":
                 self._check_display_channel(interaction)
             elif d["kind"] == "reply":
@@ -511,6 +512,7 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
                 except discord.HTTPException:
                     raise PersonaError("原消息已经不可访问了，不能回复。")
                 header, ping = ui.reply_header(target, d["reply_to"]["jump_url"])
+                reply_target_id = target.id
                 content = self.service.validate_message(ui.reply_content(header, d["text"]))
             else:
                 content = self.service.validate_message(d["text"])
@@ -548,12 +550,102 @@ class PersonaProxy(commands.Cog, name="PersonaProxy"):
                                  "channel_id": d["channel_id"], "message_ids": d["message_ids"],
                                  "reply_to": d["reply_to"]})
         await self.err(interaction, f"✅ 已用「{discord.utils.escape_markdown(profile['name'])}」发出。")
+        if reply_target_id is not None:
+            # 被回复的若是皮套消息就提醒它的发言人；回复者只显示皮套名，不暴露背后的真人
+            mid = d["message_ids"][-1]
+            await self.notify_reply(interaction.guild, channel, reply_target_id, uid, profile["name"], d["text"],
+                                    f"https://discord.com/channels/{gid}/{channel.id}/{mid}")
 
     async def _safe_finish(self, gid: int, draft_id: str, status: str, error: str) -> None:
         try:
             await self.service.finish(gid, draft_id, status, error=error)
         except StorageError:
             log.error("皮套：guild=%s 草稿 %s 状态更新失败", gid, draft_id)
+
+    # ------------------------------------------------------------------ 被回复私信提醒
+
+    @commands.Cog.listener("on_message")
+    async def notify_on_native_reply(self, message: discord.Message):
+        """有人用 Discord 原生回复回了一条皮套消息：私信提醒这条皮套消息的实际发言人。"""
+        if message.guild is None or message.webhook_id is not None or message.author.bot:
+            return
+        ref = message.reference
+        if message.type != discord.MessageType.reply or ref is None or ref.message_id is None:
+            return
+        await self.notify_reply(message.guild, message.channel, ref.message_id, message.author.id,
+                                message.author.display_name, message.content, message.jump_url)
+
+    async def notify_reply(self, guild, channel, target_message_id: int, replier_id: int, replier_name: str,
+                           content: str, jump_url: str) -> None:
+        """被回复的若是皮套消息，私信审计记录里的实际发言人。任何失败都只记日志，不影响回复本身。"""
+        try:
+            await self._notify_reply(guild, channel, target_message_id, replier_id, replier_name, content, jump_url)
+        except Exception:
+            log.exception("皮套：被回复提醒失败 guild=%s channel=%s", getattr(guild, "id", None),
+                          getattr(channel, "id", None))
+
+    async def _notify_reply(self, guild, channel, target_message_id, replier_id, replier_name, content, jump_url):
+        if guild is None or self.service.guild_cfg(guild.id) is None:
+            return
+        gid = guild.id
+        # 查审计索引就能判断是不是皮套消息，不用去拉原消息
+        rec = self.service.store.find_audit(gid, target_message_id)
+        if rec is None:
+            return
+        uid = int(rec["owner_id"])
+        if uid == int(replier_id) or not self.service.reply_notify_enabled(gid, uid):
+            return
+        member = guild.get_member(uid)
+        if member is None:
+            try:
+                member = await guild.fetch_member(uid)
+            except discord.NotFound:
+                return
+        # 已经看不到这个频道的人不提醒，避免把回复内容私信给没有权限的人
+        if not await self._can_view(channel, member):
+            return
+        if not self.service.take_notify_slot(gid, uid, channel.id):
+            return
+        text = ui.reply_notify_text(rec.get("profile_name") or "已删除的皮套", guild.name, channel.id, replier_name,
+                                    content, jump_url, self.cfg["reply_notify_snippet_length"])
+        try:
+            await member.send(text, allowed_mentions=discord.AllowedMentions.none())
+        except discord.Forbidden:
+            pass    # 对方关了服务器私信
+
+    @staticmethod
+    async def _can_view(channel, member) -> bool:
+        perms = channel.permissions_for(member)
+        if not perms.view_channel:
+            return False
+        if isinstance(channel, discord.Thread) and channel.type == discord.ChannelType.private_thread                 and not perms.manage_threads:
+            try:
+                await channel.fetch_member(member.id)     # 私密子区只有成员能看
+            except discord.HTTPException:
+                return False
+        return True
+
+    @app_commands.command(name="皮套提醒", description="皮套消息被回复时是否私信提醒你（不填则查看当前设置）")
+    @app_commands.describe(state="开启或关闭")
+    @app_commands.choices(state=[app_commands.Choice(name="开启", value="on"),
+                                 app_commands.Choice(name="关闭", value="off")])
+    @app_commands.guild_only()
+    async def reply_notify(self, interaction: discord.Interaction, state: app_commands.Choice[str] | None = None):
+        gid, uid = interaction.guild_id, interaction.user.id
+        try:
+            if self.service.guild_cfg(gid) is None:
+                raise PersonaError("本服没有开启皮套功能。")
+            if state is None:
+                on = self.service.reply_notify_enabled(gid, uid)
+            else:
+                on = state.value == "on"
+                await self.service.set_reply_notify(gid, uid, on)
+        except PersonaError as e:
+            return await self.err(interaction, str(e))
+        except StorageError:
+            return await self.err(interaction, MSG_STORAGE)
+        prefix = "当前：" if state is None else "已"
+        await self.err(interaction, f"🔔 {prefix}开启皮套被回复私信提醒。" if on else f"🔕 {prefix}关闭皮套被回复私信提醒。")
 
     # ------------------------------------------------------------------ 右键菜单
 

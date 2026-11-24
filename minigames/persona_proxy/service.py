@@ -47,6 +47,7 @@ class PersonaService:
         self.cfg = cfg or load_config()
         self.store = store or PersonaStore(PROJECT_ROOT / self.cfg["data_dir"])
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self._notified_at: dict[tuple[int, int, int], datetime] = {}   # (guild, 被提醒人, 频道) → 上次私信时间，只在内存
 
     # ------------------------------------------------------------------ 配置与门槛
 
@@ -305,6 +306,30 @@ class PersonaService:
 
     def audit(self, guild_id: int, record: dict) -> None:
         self.store.append_audit(guild_id, {"at": _iso(self.clock()), **record})
+
+    # ------------------------------------------------------------------ 被回复私信提醒
+
+    def reply_notify_enabled(self, guild_id: int, user_id: int) -> bool:
+        """默认开启，用 /皮套提醒 关闭。"""
+        return str(user_id) not in self.store.load(guild_id)["reply_notify_off"]
+
+    async def set_reply_notify(self, guild_id: int, user_id: int, enabled: bool) -> None:
+        async with self.store.transaction(guild_id) as doc:
+            off = set(doc["reply_notify_off"])
+            if enabled:
+                off.discard(str(user_id))
+            else:
+                off.add(str(user_id))
+            doc["reply_notify_off"] = sorted(off)
+
+    def take_notify_slot(self, guild_id: int, user_id: int, channel_id: int) -> bool:
+        """同一个人在同一个频道冷却期内只私信一次；可以发时记下这次的时间。"""
+        key, now = (int(guild_id), int(user_id), int(channel_id)), self.clock()
+        last = self._notified_at.get(key)
+        if last is not None and now - last < timedelta(seconds=self.cfg["reply_notify_cooldown_seconds"]):
+            return False
+        self._notified_at[key] = now
+        return True
 
 
 __all__ = ["PersonaService", "PersonaError", "StorageError", "PENDING", "SENDING", "SENT", "FAILED", "PARTIAL",
