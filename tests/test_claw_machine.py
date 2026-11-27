@@ -109,7 +109,7 @@ class EngineTests(unittest.TestCase):
             self.assertIn(c["position"], CFG["positions"])
 
     def test_pool_sizes(self):
-        self.assertEqual([len(CFG[k]) for k in ("subjects", "moods", "toy_types", "quirks")], [28, 35, 15, 44])
+        self.assertEqual([len(CFG[k]) for k in ("subjects", "moods", "toy_types", "quirks")], [29, 35, 15, 46])
 
     def test_name_format(self):
         c = cand("青楼老板娘", "偷薯饼的", "毛绒团子", "一捏就大喊「薯饼是我的！」")
@@ -157,6 +157,8 @@ class EngineTests(unittest.TestCase):
             "guoshi_dream": cand("国师", "努力双修的", "毛绒团子", "做梦梦到把无秋踩在脚底"),
             "military_betrothal": cand("无秋", "正在摆烂的", "毛绒团子", "把虎贲军费送给洛神当彩礼"),
             "flying_banker": cand("合欢宗主", "正在摆烂的", "毛绒团子", "坐庄开盘成为空中飞人"),
+            "guoshi_wrong_name": cand("国师", "正在摆烂的", "毛绒团子", "和女儿双修叫出了老公的名字"),
+            "peach_caught": cand("小桃花", "正在摆烂的", "毛绒团子", "日常逮住道侣和其他人纯爱"),
         }
         self.assertEqual(set(cases), {e["id"] for e in CFG["_eggs"]})
         for egg_id, c in cases.items():
@@ -626,6 +628,8 @@ EGG_CANDS = {
     "guoshi_dream": lambda: cand("国师", "努力双修的", "八音盒", "做梦梦到把无秋踩在脚底"),
     "military_betrothal": lambda: cand("无秋", "偷偷傻笑的", "八音盒", "把虎贲军费送给洛神当彩礼"),
     "flying_banker": lambda: cand("合欢宗主", "偷偷傻笑的", "八音盒", "坐庄开盘成为空中飞人"),
+    "guoshi_wrong_name": lambda: cand("国师", "偷偷傻笑的", "八音盒", "和女儿双修叫出了老公的名字"),
+    "peach_caught": lambda: cand("小桃花", "偷偷傻笑的", "八音盒", "日常逮住道侣和其他人纯爱"),
 }
 
 
